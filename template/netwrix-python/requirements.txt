@@ -1,0 +1,4 @@
+flask
+waitress
+tox==3.*
+requests==2.31.0
