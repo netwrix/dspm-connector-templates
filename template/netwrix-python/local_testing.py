@@ -259,6 +259,62 @@ def validate_update_execution_params(status, total_objects, completed_objects, i
     
     return True, None
 
+def validate_get_object_response(response_data):
+    """
+    Validates get-object response schema in dev environment.
+    Expected schema: {"body": {"data": "<base64_string>"}}
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    import base64
+    import re
+    
+    if not isinstance(response_data, dict):
+        return False, "Response must be a dictionary"
+    
+    # Check for body property
+    if 'body' not in response_data:
+        return False, "Response must contain a 'body' property"
+    
+    body = response_data['body']
+    if not isinstance(body, dict):
+        return False, "Response body must be a dictionary"
+    
+    # Check that body contains only 'data' property
+    body_keys = set(body.keys())
+    expected_keys = {'data'}
+    extra_keys = body_keys - expected_keys
+    
+    if extra_keys:
+        return False, f"Response body contains additional properties: {sorted(list(extra_keys))}"
+    
+    if 'data' not in body:
+        return False, "Response body must contain a 'data' property"
+    
+    data_value = body['data']
+    
+    # Validate that data is a string
+    if not isinstance(data_value, str):
+        return False, f"Response body.data must be a string, got {type(data_value).__name__}"
+    
+    # Validate that data is base64 encoded
+    if not data_value:
+        return False, "Response body.data cannot be empty"
+    
+    # Check base64 format using regex (basic check)
+    base64_pattern = r'^[A-Za-z0-9+/]*={0,2}$'
+    if not re.match(base64_pattern, data_value):
+        return False, "Response body.data is not valid base64 format"
+    
+    # Try to decode to verify it's valid base64
+    try:
+        base64.b64decode(data_value, validate=True)
+    except Exception:
+        return False, "Response body.data is not valid base64 encoding"
+    
+    return True, None
+
 def validate_dev_data(config, table, data):
     """
     Validates data for DEV environment against config schema.

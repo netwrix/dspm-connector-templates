@@ -6,7 +6,7 @@ import os
 import json
 
 from function import handler
-from local_testing import validate_dev_data, validate_request_schema, validate_update_execution_params
+from local_testing import validate_dev_data, validate_request_schema, validate_update_execution_params, validate_get_object_response
 
 app = Flask(__name__)
 
@@ -253,6 +253,12 @@ def call_handler(path):
         print(f"Loaded {len(context.secrets)} secrets from secret files", flush=True)
     
     response_data = handler.handle(event, context)
+    
+    # Validate get-object response schema in dev environment
+    if context.run_local == "true" and context.function_type == "get-object":
+        is_valid, error_msg = validate_get_object_response(response_data)
+        if not is_valid:
+            return jsonify({"error": f"Invalid get-object response: {error_msg}"}), 400
     
     resp = format_response(response_data)
     return resp
