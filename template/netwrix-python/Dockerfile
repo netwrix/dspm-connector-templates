@@ -21,7 +21,7 @@ USER app
 ENV PATH=$PATH:/home/app/.local/bin
 
 WORKDIR /home/app/
-
+COPY --chown=app:app local_testing.py   .
 COPY --chown=app:app index.py           .
 COPY --chown=app:app requirements.txt   .
 USER root
