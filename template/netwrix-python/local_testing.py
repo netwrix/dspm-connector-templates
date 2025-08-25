@@ -1,5 +1,197 @@
 import json
 
+def validate_request_schema(config, request_data, function_type):
+    """
+    Validates request body against the expected schema based on the function type.
+    
+    Args:
+        config (dict): Configuration dictionary containing variables schema
+        request_data (dict): Request body to validate
+        function_type (str): Function type from FUNCTION_TYPE environment variable
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if not isinstance(request_data, dict):
+        return False, "Request body must be a JSON object"
+    
+    if not function_type:
+        return False, "Missing FUNCTION_TYPE environment variable"
+    
+    valid_functions = ['test-connection', 'access-scan', 'get-object']
+    if function_type not in valid_functions:
+        return False, f"Invalid function type. Must be one of: {valid_functions}"
+    
+    # Define allowed top-level properties for each function type
+    allowed_properties = {
+        'test-connection': {'connection'},
+        'access-scan': {'connection', 'access-scan'},
+        'get-object': {'connection', 'location'}
+    }
+    
+    # Check for additional properties at the top level
+    actual_properties = set(request_data.keys())
+    expected_properties = allowed_properties.get(function_type, set())
+    extra_properties = actual_properties - expected_properties
+    if extra_properties:
+        return False, f"Additional properties not allowed for {function_type}: {sorted(list(extra_properties))}"
+    
+    # Validate connection object (required for all functions)
+    if 'connection' not in request_data:
+        return False, "Missing required field: 'connection'"
+    
+    connection_data = request_data['connection']
+    if not isinstance(connection_data, dict):
+        return False, "'connection' must be an object"
+    
+    # Validate connection fields against config.variables.connection
+    connection_config = config.get('variables', {}).get('connection', [])
+    is_valid, error_msg = _validate_object_against_schema(connection_data, connection_config, 'connection')
+    if not is_valid:
+        return False, error_msg
+    
+    # Function-specific validation
+    if function_type == 'access-scan':
+        if 'access-scan' not in request_data:
+            return False, "Missing required field: 'access-scan' for access-scan function"
+        
+        access_scan_data = request_data['access-scan']
+        if not isinstance(access_scan_data, dict):
+            return False, "'access-scan' must be an object"
+        
+        # Validate access-scan fields against config.variables.accessScan
+        access_scan_config = config.get('variables', {}).get('accessScan', [])
+        is_valid, error_msg = _validate_object_against_schema(access_scan_data, access_scan_config, 'access-scan')
+        if not is_valid:
+            return False, error_msg
+    
+    elif function_type == 'get-object':
+        if 'location' not in request_data:
+            return False, "Missing required field: 'location' for get-object function"
+        
+        location_data = request_data['location']
+        if not isinstance(location_data, dict):
+            return False, "'location' must be an object"
+        
+        # Validate location fields against config.getObjectColumns
+        get_object_columns = config.get('getObjectColumns', [])
+        is_valid, error_msg = _validate_location_against_columns(location_data, get_object_columns)
+        if not is_valid:
+            return False, error_msg
+    
+    return True, None
+
+def _validate_object_against_schema(data, schema_config, field_name):
+    """
+    Validates an object against a schema configuration.
+    
+    Args:
+        data (dict): Data object to validate
+        schema_config (list): List of field configurations
+        field_name (str): Name of the field being validated (for error messages)
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    # Get list of allowed field keys from schema
+    allowed_keys = {field_config.get('key') for field_config in schema_config if field_config.get('key')}
+    
+    # Check for additional properties not in schema
+    actual_keys = set(data.keys())
+    extra_keys = actual_keys - allowed_keys
+    if extra_keys:
+        return False, f"Additional properties not allowed in '{field_name}': {sorted(list(extra_keys))}"
+    
+    # Validate each field in schema
+    for field_config in schema_config:
+        field_key = field_config.get('key')
+        field_type = field_config.get('type')
+        required = field_config.get('required', False)
+        
+        value = data.get(field_key)
+        
+        # Check required fields
+        if required and (value is None or value == ""):
+            return False, f"Missing required field: '{field_name}.{field_key}'"
+        
+        # Skip validation for optional fields that are not provided
+        if value is None and not required:
+            continue
+        
+        # Type validation
+        if field_type == 'text' or field_type == 'string':
+            if not isinstance(value, str):
+                return False, f"Field '{field_name}.{field_key}' must be a string, got {type(value).__name__}"
+        elif field_type == 'number':
+            if not isinstance(value, (int, float)):
+                return False, f"Field '{field_name}.{field_key}' must be a number, got {type(value).__name__}"
+            
+            # Check min/max constraints
+            min_val = field_config.get('min')
+            max_val = field_config.get('max')
+            if min_val is not None and value < min_val:
+                return False, f"Field '{field_name}.{field_key}' must be >= {min_val}, got {value}"
+            if max_val is not None and value > max_val:
+                return False, f"Field '{field_name}.{field_key}' must be <= {max_val}, got {value}"
+        elif field_type == 'checkbox':
+            if not isinstance(value, bool):
+                return False, f"Field '{field_name}.{field_key}' must be a boolean, got {type(value).__name__}"
+        elif field_type == 'list':
+            if value is not None:
+                # For list fields, accept both arrays and single values
+                if isinstance(value, str):
+                    # Single string value - convert to list for validation
+                    value_list = [value]
+                elif isinstance(value, list):
+                    value_list = value
+                else:
+                    return False, f"Field '{field_name}.{field_key}' must be a string or array, got {type(value).__name__}"
+                
+                # Validate options if specified
+                options = field_config.get('options', [])
+                if options:
+                    valid_values = [opt.get('value') for opt in options if 'value' in opt]
+                    for val in value_list:
+                        if val not in valid_values:
+                            return False, f"Field '{field_name}.{field_key}' contains invalid value '{val}'. Valid options: {valid_values}"
+    
+    return True, None
+
+def _validate_location_against_columns(location_data, get_object_columns):
+    """
+    Validates location object against getObjectColumns configuration.
+    
+    Args:
+        location_data (dict): Location data from request
+        get_object_columns (list): List of column configurations
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    expected_columns = []
+    for col_config in get_object_columns:
+        column_name = col_config.get('column')
+        if column_name:
+            expected_columns.append(column_name)
+    
+    actual_columns = list(location_data.keys())
+    
+    # Check that all expected columns are present and in the correct order
+    if len(actual_columns) != len(expected_columns):
+        return False, f"Location must contain exactly {len(expected_columns)} columns. Expected: {expected_columns}, Got: {actual_columns}"
+    
+    # Check order and presence of columns
+    for i, expected_col in enumerate(expected_columns):
+        if i >= len(actual_columns) or actual_columns[i] != expected_col:
+            return False, f"Location columns must match order and names. Expected: {expected_columns}, Got: {actual_columns}"
+    
+    # Validate that all values are strings (column values)
+    for col_name, col_value in location_data.items():
+        if not isinstance(col_value, str):
+            return False, f"Location column '{col_name}' must be a string, got {type(col_value).__name__}"
+    
+    return True, None
+
 def validate_dev_data(config, table, data):
     """
     Validates data for DEV environment against config schema.
@@ -12,14 +204,6 @@ def validate_dev_data(config, table, data):
     Returns:
         tuple: (is_valid, error_message)
     """
-    if config is None:
-        return False, "Config is required in DEV environment"
-    
-    try:
-        # Parse config JSON
-        config = json.loads(config)
-    except json.JSONDecodeError as e:
-        return False, f"Invalid JSON in config: {str(e)}"
     
     # Check if table exists in config.intelligence array
     tables = config.get('intelligence', [])

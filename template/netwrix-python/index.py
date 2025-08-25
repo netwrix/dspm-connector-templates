@@ -6,7 +6,7 @@ import os
 import json
 
 from function import handler
-from local_testing import validate_dev_data
+from local_testing import validate_dev_data, validate_request_schema
 
 app = Flask(__name__)
 
@@ -27,7 +27,8 @@ class Context:
         self.scan_execution_id = None
         self.sync_execution_id = None
         self.run_local = os.getenv('RUN_LOCAL', 'false')
-        self.config = os.getenv('CONFIG')
+        self.config = json.loads(os.getenv('CONFIG'))
+        self.function_type = os.getenv('FUNCTION_TYPE')
     
     def save_data(self, table, data):
         if os.getenv('SAVE_DATA_FUNCTION') == None:
@@ -208,7 +209,26 @@ def format_response(resp):
 def call_handler(path):
     event = Event()
     context = Context()
-    
+
+    if context.run_local == "true":
+        if context.config is None:
+            return jsonify({"error": "CONFIG is required when RUN_LOCAL is true"}), 400
+        
+        if context.function_type is None:
+            return jsonify({"error": "FUNCTION_TYPE is required when RUN_LOCAL is true"}), 400
+        
+        try:
+            # Validate request body against config
+            request_data = json.loads(event.body)
+            is_valid, error_msg = validate_request_schema(context.config, request_data, context.function_type)
+            if not is_valid:
+                return jsonify({"error": error_msg}), 400
+            
+        except json.JSONDecodeError as e:
+            return jsonify({"error": f"Invalid JSON in CONFIG: {str(e)}"}), 400
+        except Exception as e:
+            return jsonify({"error": f"Invalid JSON in request body: {str(e)}"}), 400
+
     # Load secrets from OpenFaaS secret files
     context.secrets = get_secrets()
 
