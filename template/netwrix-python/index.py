@@ -35,8 +35,8 @@ class Context:
             print(error_msg, flush=True)
             return False, error_msg
         
-        # DEV environment validation
-        if self.environment == "DEV":
+        # dev environment validation
+        if self.environment == "dev":
             is_valid, error_msg = validate_dev_data(self.config, table, data)
             if not is_valid:
                 print(error_msg, flush=True)
