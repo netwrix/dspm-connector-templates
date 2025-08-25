@@ -6,7 +6,7 @@ import os
 import json
 
 from function import handler
-from local_testing import validate_dev_data, validate_request_schema
+from local_testing import validate_dev_data, validate_request_schema, validate_update_execution_params
 
 app = Flask(__name__)
 
@@ -42,6 +42,8 @@ class Context:
             if not is_valid:
                 print(error_msg, flush=True)
                 return False, error_msg
+            else:
+                return True, None
         else:
             try:
                 payload = {
@@ -74,6 +76,15 @@ class Context:
             error_msg = "APP_UPDATE_EXECUTION_FUNCTION is not in the environment"
             print(error_msg, flush=True)
             return False, error_msg
+        
+        # Validation for dev environment
+        if self.run_local == "true":
+            is_valid, error_msg = validate_update_execution_params(status, total_objects, completed_objects, increment_completed_objects, completed_at)
+            if not is_valid:
+                print(error_msg, flush=True)
+                return False, error_msg
+            else:
+                return True, None
         
         if self.scan_execution_id != "" and self.scan_execution_id != None:
             execution_id = self.scan_execution_id

@@ -25,7 +25,7 @@ def validate_request_schema(config, request_data, function_type):
     # Define allowed top-level properties for each function type
     allowed_properties = {
         'test-connection': {'connection'},
-        'access-scan': {'connection', 'access-scan'},
+        'access-scan': {'connection', 'accessScan'},
         'get-object': {'connection', 'location'}
     }
     
@@ -52,16 +52,16 @@ def validate_request_schema(config, request_data, function_type):
     
     # Function-specific validation
     if function_type == 'access-scan':
-        if 'access-scan' not in request_data:
-            return False, "Missing required field: 'access-scan' for access-scan function"
+        if 'accessScan' not in request_data:
+            return False, "Missing required field: 'accessScan' for access-scan function"
         
-        access_scan_data = request_data['access-scan']
+        access_scan_data = request_data['accessScan']
         if not isinstance(access_scan_data, dict):
-            return False, "'access-scan' must be an object"
+            return False, "'accessScan' must be an object"
         
-        # Validate access-scan fields against config.variables.accessScan
+        # Validate accessScan fields against config.variables.accessScan
         access_scan_config = config.get('variables', {}).get('accessScan', [])
-        is_valid, error_msg = _validate_object_against_schema(access_scan_data, access_scan_config, 'access-scan')
+        is_valid, error_msg = _validate_object_against_schema(access_scan_data, access_scan_config, 'accessScan')
         if not is_valid:
             return False, error_msg
     
@@ -189,6 +189,73 @@ def _validate_location_against_columns(location_data, get_object_columns):
     for col_name, col_value in location_data.items():
         if not isinstance(col_value, str):
             return False, f"Location column '{col_name}' must be a string, got {type(col_value).__name__}"
+    
+    return True, None
+
+def validate_update_execution_params(status, total_objects, completed_objects, increment_completed_objects, completed_at):
+    """
+    Validates parameters for update_execution method in dev environment.
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    # Validate status
+    if status is not None:
+        valid_statuses = ["running", "completed", "failed"]
+        if status not in valid_statuses:
+            return False, f"Invalid status: '{status}'. Must be one of: {valid_statuses}"
+    
+    # Validate total_objects
+    if total_objects is not None:
+        if not isinstance(total_objects, int) or total_objects < 0:
+            return False, f"total_objects must be a non-negative integer, got: {total_objects}"
+    
+    # Validate completed_objects
+    if completed_objects is not None:
+        if not isinstance(completed_objects, int) or completed_objects < 0:
+            return False, f"completed_objects must be a non-negative integer, got: {completed_objects}"
+    
+    # Validate increment_completed_objects
+    if increment_completed_objects is not None:
+        if not isinstance(increment_completed_objects, int) or increment_completed_objects < 0:
+            return False, f"increment_completed_objects must be a non-negative integer, got: {increment_completed_objects}"
+    
+    # Check that only one of completed_objects or increment_completed_objects is provided
+    if completed_objects is not None and increment_completed_objects is not None:
+        return False, "Only one of completed_objects or increment_completed_objects can be provided, not both"
+    
+    # Check that completed_objects is not greater than total_objects
+    if total_objects is not None and completed_objects is not None:
+        if completed_objects > total_objects:
+            return False, f"completed_objects ({completed_objects}) cannot be greater than total_objects ({total_objects})"
+    
+    # Validate completed_at ISO8601 format
+    if completed_at is not None:
+        import re
+        from datetime import datetime
+        
+        # ISO8601 regex pattern - supports various formats
+        iso8601_pattern = r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2}))$'
+        
+        if not isinstance(completed_at, str):
+            return False, f"completed_at must be a string in ISO8601 format, got: {type(completed_at).__name__}"
+        
+        if not re.match(iso8601_pattern, completed_at):
+            return False, f"completed_at must be in ISO8601 format (e.g., '2023-12-25T10:30:00Z'), got: '{completed_at}'"
+        
+        # Additional validation by attempting to parse
+        try:
+            # Try parsing common ISO8601 formats
+            for fmt in ['%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M:%S.%f%z']:
+                try:
+                    datetime.strptime(completed_at.replace('Z', '+00:00') if completed_at.endswith('Z') else completed_at, fmt.replace('%z', '+00:00') if fmt.endswith('%z') else fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return False, f"completed_at is not a valid ISO8601 datetime: '{completed_at}'"
+        except Exception:
+            return False, f"completed_at is not a valid ISO8601 datetime: '{completed_at}'"
     
     return True, None
 
