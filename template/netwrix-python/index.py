@@ -6,6 +6,7 @@ import os
 import json
 
 from function import handler
+from local_testing import validate_dev_data
 
 app = Flask(__name__)
 
@@ -25,6 +26,8 @@ class Context:
         self.sync_id = os.getenv('SYNC_ID')
         self.scan_execution_id = None
         self.sync_execution_id = None
+        self.environment = os.getenv('ENVIRONMENT', 'PROD')
+        self.config = os.getenv('CONFIG')
     
     def save_data(self, table, data):
         if os.getenv('SAVE_DATA_FUNCTION') == None:
@@ -32,31 +35,38 @@ class Context:
             print(error_msg, flush=True)
             return False, error_msg
         
-        try:
-            payload = {
-                'sourceType': os.getenv('SOURCE_TYPE'),
-                'version': os.getenv('SOURCE_VERSION'),
-                'table': table,
-                'data': data
-            }
-            
-            response = requests.post(
-                f'{os.getenv("OPENFAAS_GATEWAY")}/async-function/{os.getenv("SAVE_DATA_FUNCTION")}',
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=30
-            )
-            
-            if response.status_code == 202:
-                return True, None
-            else:
-                error_msg = f"Status {response.status_code}: {response.text}"
+        # DEV environment validation
+        if self.environment == "DEV":
+            is_valid, error_msg = validate_dev_data(self.config, table, data)
+            if not is_valid:
                 print(error_msg, flush=True)
                 return False, error_msg
-        except Exception as e:
-            error_msg = f"Error: {str(e)}"
-            print(error_msg, flush=True)
-            return False, error_msg
+        else:
+            try:
+                payload = {
+                    'sourceType': os.getenv('SOURCE_TYPE'),
+                    'version': os.getenv('SOURCE_VERSION'),
+                    'table': table,
+                    'data': data
+                }
+                
+                response = requests.post(
+                    f'{os.getenv("OPENFAAS_GATEWAY")}/async-function/{os.getenv("SAVE_DATA_FUNCTION")}',
+                    json=payload,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30
+                )
+                
+                if response.status_code == 202:
+                    return True, None
+                else:
+                    error_msg = f"Status {response.status_code}: {response.text}"
+                    print(error_msg, flush=True)
+                    return False, error_msg
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                print(error_msg, flush=True)
+                return False, error_msg
     
     def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, completed_at=None):
         if os.getenv('APP_UPDATE_EXECUTION_FUNCTION') == None:
