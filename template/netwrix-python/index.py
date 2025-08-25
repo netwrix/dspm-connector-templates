@@ -26,7 +26,7 @@ class Context:
         self.sync_id = os.getenv('SYNC_ID')
         self.scan_execution_id = None
         self.sync_execution_id = None
-        self.environment = os.getenv('ENVIRONMENT', 'PROD')
+        self.run_local = os.getenv('RUN_LOCAL', 'false')
         self.config = os.getenv('CONFIG')
     
     def save_data(self, table, data):
@@ -36,7 +36,7 @@ class Context:
             return False, error_msg
         
         # dev environment validation
-        if self.environment == "dev":
+        if self.run_local == "true":
             is_valid, error_msg = validate_dev_data(self.config, table, data)
             if not is_valid:
                 print(error_msg, flush=True)
