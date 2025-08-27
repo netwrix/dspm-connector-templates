@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from datetime import datetime, timezone
 import requests
 from flask import Flask, request, jsonify
 from waitress import serve
@@ -6,7 +7,7 @@ import os
 import json
 
 from function import handler
-from local_testing import validate_dev_data, validate_request_schema, validate_update_execution_params, validate_get_object_response
+from local_testing import validate_access_scan_response, validate_dev_data, validate_error_response, validate_request_schema, validate_test_connection_response, validate_update_execution_params, validate_get_object_response
 
 app = Flask(__name__)
 
@@ -29,6 +30,35 @@ class Context:
         self.run_local = os.getenv('RUN_LOCAL', 'false')
         self.config = json.loads(os.getenv('CONFIG'))
         self.function_type = os.getenv('FUNCTION_TYPE')
+
+    def test_connection_success_response(self):
+        return {
+            "statusCode": 200,
+            "body": {}
+        }
+    
+    def access_scan_success_response(self):
+        return {
+            "statusCode": 200,
+            "body": {}
+        }
+    
+    def get_object_success_response(self, base64_encoded_object):
+        return {
+            "statusCode": 200,
+            "body": { "data": base64_encoded_object }
+        }
+
+    def error_response(self, clientError, error_msg):
+        if clientError:
+            status_code = 400
+        else:
+            status_code = 500
+
+        return {
+            "statusCode": status_code,
+            "body": {"error": error_msg}
+        }
     
     def save_data(self, table, data):
         if os.getenv('SAVE_DATA_FUNCTION') == None:
@@ -252,13 +282,35 @@ def call_handler(path):
     else:
         print(f"Loaded {len(context.secrets)} secrets from secret files", flush=True)
     
+    started_at = datetime.now(timezone.utc).isoformat()
     response_data = handler.handle(event, context)
-    
-    # Validate get-object response schema in dev environment
-    if context.run_local == "true" and context.function_type == "get-object":
-        is_valid, error_msg = validate_get_object_response(response_data)
-        if not is_valid:
-            return jsonify({"error": f"Invalid get-object response: {error_msg}"}), 400
+    completed_at = datetime.now(timezone.utc).isoformat()
+
+    print(f"Response data: {response_data}", flush=True)
+
+    if context.run_local == "true":
+        if context.function_type == "test-connection" and response_data['statusCode'] == 200:
+            response_data['body']['startedAt'] = started_at
+            response_data['body']['completedAt'] = completed_at
+            is_valid, error_msg = validate_test_connection_response(response_data)
+            if not is_valid:
+                response_data = context.error_response(False, error_msg)
+        elif context.function_type == "access-scan" and response_data['statusCode'] == 200:
+            response_data['body']['startedAt'] = started_at
+            response_data['body']['completedAt'] = completed_at
+            is_valid, error_msg = validate_access_scan_response(response_data)
+            if not is_valid:
+                response_data = context.error_response(False, error_msg)
+        elif context.function_type == "get-object" and response_data['statusCode'] == 200:
+            is_valid, error_msg = validate_get_object_response(response_data)
+            if not is_valid:
+                response_data = context.error_response(False, error_msg)
+        elif response_data['statusCode'] != 200:
+            is_valid, error_msg = validate_error_response(response_data)
+            if not is_valid:
+                response_data = context.error_response(False, error_msg)
+        else:
+            response_data = context.error_response(False, "The response from the function is not in an acceptable format")
     
     resp = format_response(response_data)
     return resp

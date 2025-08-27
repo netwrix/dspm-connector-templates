@@ -315,6 +315,206 @@ def validate_get_object_response(response_data):
     
     return True, None
 
+def validate_test_connection_response(response_data):
+    """
+    Validates test-connection response schema in dev environment.
+    Expected schema: {"body": {"startedAt": "<datetime>", "completedAt": "<datetime>"}}
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    import re
+    from datetime import datetime
+    
+    if not isinstance(response_data, dict):
+        return False, "Response must be a dictionary"
+    
+    # Check for body property
+    if 'body' not in response_data:
+        return False, "Response must contain a 'body' property"
+    
+    body = response_data['body']
+    if not isinstance(body, dict):
+        return False, "Response body must be a dictionary"
+    
+    # Check that body contains only required properties
+    body_keys = set(body.keys())
+    required_keys = {'startedAt', 'completedAt'}
+    
+    # Check for missing required keys
+    missing_keys = required_keys - body_keys
+    if missing_keys:
+        return False, f"Response body missing required properties: {sorted(list(missing_keys))}"
+    
+    # Check for additional properties
+    extra_keys = body_keys - required_keys
+    if extra_keys:
+        return False, f"Response body contains additional properties: {sorted(list(extra_keys))}"
+    
+    # Validate datetime formats (ISO8601)
+    iso8601_pattern = r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2}))$'
+    
+    for field_name in ['startedAt', 'completedAt']:
+        field_value = body[field_name]
+        
+        # Validate that field is a string
+        if not isinstance(field_value, str):
+            return False, f"Response body.{field_name} must be a string, got {type(field_value).__name__}"
+        
+        # Validate ISO8601 format
+        if not re.match(iso8601_pattern, field_value):
+            return False, f"Response body.{field_name} must be in ISO8601 format (e.g., '2023-12-25T10:30:00Z'), got: '{field_value}'"
+        
+        # Additional validation by attempting to parse
+        try:
+            # Try parsing common ISO8601 formats
+            for fmt in ['%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M:%S.%f%z']:
+                try:
+                    datetime.strptime(field_value.replace('Z', '+00:00') if field_value.endswith('Z') else field_value, fmt.replace('%z', '+00:00') if fmt.endswith('%z') else fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return False, f"Response body.{field_name} is not a valid ISO8601 datetime: '{field_value}'"
+        except Exception:
+            return False, f"Response body.{field_name} is not a valid ISO8601 datetime: '{field_value}'"
+    
+    # Validate that completedAt is after startedAt
+    try:
+        started_dt = datetime.fromisoformat(body['startedAt'].replace('Z', '+00:00'))
+        completed_dt = datetime.fromisoformat(body['completedAt'].replace('Z', '+00:00'))
+        
+        if completed_dt < started_dt:
+            return False, f"Response body.completedAt ({body['completedAt']}) must be after startedAt ({body['startedAt']})"
+    except Exception:
+        # If we can't parse for comparison, we've already validated format above
+        pass
+    
+    return True, None
+
+def validate_access_scan_response(response_data):
+    """
+    Validates access-scan response schema in dev environment.
+    Expected schema: {"body": {"startedAt": "<datetime>", "completedAt": "<datetime>"}}
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    import re
+    from datetime import datetime
+    
+    if not isinstance(response_data, dict):
+        return False, "Response must be a dictionary"
+    
+    # Check for body property
+    if 'body' not in response_data:
+        return False, "Response must contain a 'body' property"
+    
+    body = response_data['body']
+    if not isinstance(body, dict):
+        return False, "Response body must be a dictionary"
+    
+    # Check that body contains only required properties
+    body_keys = set(body.keys())
+    required_keys = {'startedAt', 'completedAt'}
+    
+    # Check for missing required keys
+    missing_keys = required_keys - body_keys
+    if missing_keys:
+        return False, f"Response body missing required properties: {sorted(list(missing_keys))}"
+    
+    # Check for additional properties
+    extra_keys = body_keys - required_keys
+    if extra_keys:
+        return False, f"Response body contains additional properties: {sorted(list(extra_keys))}"
+    
+    # Validate datetime formats (ISO8601)
+    iso8601_pattern = r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2}))$'
+    
+    for field_name in ['startedAt', 'completedAt']:
+        field_value = body[field_name]
+        
+        # Validate that field is a string
+        if not isinstance(field_value, str):
+            return False, f"Response body.{field_name} must be a string, got {type(field_value).__name__}"
+        
+        # Validate ISO8601 format
+        if not re.match(iso8601_pattern, field_value):
+            return False, f"Response body.{field_name} must be in ISO8601 format (e.g., '2023-12-25T10:30:00Z'), got: '{field_value}'"
+        
+        # Additional validation by attempting to parse
+        try:
+            # Try parsing common ISO8601 formats
+            for fmt in ['%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M:%S.%f%z']:
+                try:
+                    datetime.strptime(field_value.replace('Z', '+00:00') if field_value.endswith('Z') else field_value, fmt.replace('%z', '+00:00') if fmt.endswith('%z') else fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return False, f"Response body.{field_name} is not a valid ISO8601 datetime: '{field_value}'"
+        except Exception:
+            return False, f"Response body.{field_name} is not a valid ISO8601 datetime: '{field_value}'"
+    
+    # Validate that completedAt is after startedAt
+    try:
+        started_dt = datetime.fromisoformat(body['startedAt'].replace('Z', '+00:00'))
+        completed_dt = datetime.fromisoformat(body['completedAt'].replace('Z', '+00:00'))
+        
+        if completed_dt < started_dt:
+            return False, f"Response body.completedAt ({body['completedAt']}) must be after startedAt ({body['startedAt']})"
+    except Exception:
+        # If we can't parse for comparison, we've already validated format above
+        pass
+    
+    return True, None
+
+def validate_error_response(response_data):
+    """
+    Validates error response schema in dev environment.
+    Expected schema: {"body": {"error": "<string>"}}
+    
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if not isinstance(response_data, dict):
+        return False, "Response must be a dictionary"
+    
+    # Check for body property
+    if 'body' not in response_data:
+        return False, "Response must contain a 'body' property"
+    
+    body = response_data['body']
+    if not isinstance(body, dict):
+        return False, "Response body must be a dictionary"
+    
+    # Check that body contains only the required property
+    body_keys = set(body.keys())
+    required_keys = {'error'}
+    
+    # Check for missing required keys
+    missing_keys = required_keys - body_keys
+    if missing_keys:
+        return False, f"Response body missing required properties: {sorted(list(missing_keys))}"
+    
+    # Check for additional properties
+    extra_keys = body_keys - required_keys
+    if extra_keys:
+        return False, f"Response body contains additional properties: {sorted(list(extra_keys))}"
+    
+    # Validate error field
+    error_message = body['error']
+    
+    # Validate that error is a string
+    if not isinstance(error_message, str):
+        return False, f"Response body.error must be a string, got {type(error_message).__name__}"
+    
+    # Validate that error is not empty
+    if not error_message.strip():
+        return False, "Response body.error cannot be empty"
+    
+    return True, None
+
 def validate_dev_data(config, table, data):
     """
     Validates data for DEV environment against config schema.
