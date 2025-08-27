@@ -5,9 +5,10 @@ from flask import Flask, request, jsonify
 from waitress import serve
 import os
 import json
+import base64
 
 from function import handler
-from local_testing import validate_access_scan_response, validate_dev_data, validate_error_response, validate_request_schema, validate_test_connection_response, validate_update_execution_params, validate_get_object_response
+from local_testing import validate_access_scan_response, validate_dev_data, validate_error_response, validate_request_schema, validate_response, validate_test_connection_response, validate_update_execution_params, validate_get_object_response
 
 app = Flask(__name__)
 
@@ -43,10 +44,12 @@ class Context:
             "body": {}
         }
     
-    def get_object_success_response(self, base64_encoded_object):
+    def get_object_success_response(self, data):
+        encoded_data = base64.b64encode(data).decode('utf-8')
+        
         return {
             "statusCode": 200,
-            "body": { "data": base64_encoded_object }
+            "body": { "data": encoded_data }
         }
 
     def error_response(self, client_error, error_msg):
@@ -288,30 +291,18 @@ def call_handler(path):
 
     print(f"Response data: {response_data}", flush=True)
 
-    if context.run_local == "true":
-        if context.function_type == "test-connection" and response_data['statusCode'] == 200:
-            response_data['body']['startedAt'] = started_at
-            response_data['body']['completedAt'] = completed_at
-            is_valid, error_msg = validate_test_connection_response(response_data)
-            if not is_valid:
-                response_data = context.error_response(False, error_msg)
-        elif context.function_type == "access-scan" and response_data['statusCode'] == 200:
-            response_data['body']['startedAt'] = started_at
-            response_data['body']['completedAt'] = completed_at
-            is_valid, error_msg = validate_access_scan_response(response_data)
-            if not is_valid:
-                response_data = context.error_response(False, error_msg)
-        elif context.function_type == "get-object" and response_data['statusCode'] == 200:
-            is_valid, error_msg = validate_get_object_response(response_data)
-            if not is_valid:
-                response_data = context.error_response(False, error_msg)
-        elif response_data['statusCode'] != 200:
-            is_valid, error_msg = validate_error_response(response_data)
-            if not is_valid:
-                response_data = context.error_response(False, error_msg)
-        else:
-            response_data = context.error_response(False, "The response from the function is not in an acceptable format")
+    if context.function_type == "test-connection" and response_data['statusCode'] == 200:
+        response_data['body']['startedAt'] = started_at
+        response_data['body']['completedAt'] = completed_at
+    elif context.function_type == "access-scan" and response_data['statusCode'] == 200:
+        response_data['body']['startedAt'] = started_at
+        response_data['body']['completedAt'] = completed_at        
     
+    if context.run_local == "true":
+        is_valid, error_msg = validate_response(context.function_type, response_data)
+        if not is_valid:
+            response_data = context.error_response(False, error_msg)
+
     resp = format_response(response_data)
     return resp
 

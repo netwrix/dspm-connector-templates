@@ -599,3 +599,28 @@ def validate_dev_data(config, table, data):
                         return False, f"Column '{column_name}' array must contain strings, got {type(item).__name__}"
     
     return True, None
+
+def validate_response(function_type, response_data):
+    """
+    Validates response data based on function type by selecting the appropriate validation function.
+    
+    Args:
+        function_type (str): The type of function ('test-connection', 'access-scan', 'get-object')
+        response_data (dict): The response data to validate
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    if response_data.get('statusCode') == 200:
+        # Success responses - validate based on function type
+        if function_type == "test-connection":
+            return validate_test_connection_response(response_data)
+        elif function_type == "access-scan":
+            return validate_access_scan_response(response_data)
+        elif function_type == "get-object":
+            return validate_get_object_response(response_data)
+        else:
+            return False, f"Unknown function type: {function_type}"
+    else:
+        # Error responses - all function types use the same error format
+        return validate_error_response(response_data)
