@@ -49,8 +49,8 @@ class Context:
             "body": { "data": base64_encoded_object }
         }
 
-    def error_response(self, clientError, error_msg):
-        if clientError:
+    def error_response(self, client_error, error_msg):
+        if client_error:
             status_code = 400
         else:
             status_code = 500
