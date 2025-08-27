@@ -167,7 +167,7 @@ class Context:
             print(error_msg, flush=True)
             return False, error_msg
 
-def get_secrets():
+def get_secrets(local_run=False):
     """Read all secrets from OpenFaaS secret mount path and build a dictionary"""
     secrets_dict = {}
     secrets_dir = '/var/openfaas/secrets/'
@@ -181,28 +181,34 @@ def get_secrets():
             if not os.path.isfile(secret_path):
                 continue
             
-            # Extract the key name by removing the last 9 characters (dash + 8 chars)
-            if len(filename) > 9 and filename[-9:-8] == '-':
-                key_name = filename[:-9]  # Remove last 9 characters (-abcd1234)
-                
-                # Convert dash-separated to camelCase
-                key_parts = key_name.split('-')
-                if len(key_parts) > 1:
-                    # First part stays lowercase, subsequent parts are capitalized
-                    camel_key = key_parts[0] + ''.join(word.capitalize() for word in key_parts[1:])
-                else:
-                    camel_key = key_parts[0]
-                
-                # Read the secret content
-                try:
-                    with open(secret_path, 'r') as f:
-                        content = f.read().strip()
-                        secrets_dict[camel_key] = content
-                        print(f"Loaded secret: {camel_key}", flush=True)
-                except Exception as e:
-                    print(f"Error reading secret file {filename}: {str(e)}", flush=True)
+            # Extract the key name based on local_run parameter
+            if local_run:
+                # For local run, use the filename as-is (no scan ID removal)
+                key_name = filename
             else:
-                print(f"Skipping secret file with unexpected format: {filename}", flush=True)
+                # For non-local run, remove the last 9 characters (dash + 8 chars scan ID)
+                if len(filename) > 9 and filename[-9:-8] == '-':
+                    key_name = filename[:-9]  # Remove last 9 characters (-abcd1234)
+                else:
+                    print(f"Skipping secret file with unexpected format: {filename}", flush=True)
+                    continue
+            
+            # Convert dash-separated to camelCase
+            key_parts = key_name.split('-')
+            if len(key_parts) > 1:
+                # First part stays lowercase, subsequent parts are capitalized
+                camel_key = key_parts[0] + ''.join(word.capitalize() for word in key_parts[1:])
+            else:
+                camel_key = key_parts[0]
+            
+            # Read the secret content
+            try:
+                with open(secret_path, 'r') as f:
+                    content = f.read().strip()
+                    secrets_dict[camel_key] = content
+                    print(f"Loaded secret: {camel_key}", flush=True)
+            except Exception as e:
+                print(f"Error reading secret file {filename}: {str(e)}", flush=True)
     
     except Exception as e:
         print(f"Error reading secrets directory: {str(e)}", flush=True)
@@ -255,6 +261,11 @@ def call_handler(path):
     context = Context()
 
     if context.run_local == "true":
+        local_run = True
+    else:
+        local_run = False
+
+    if local_run:
         if context.config is None:
             return jsonify({"error": "CONFIG is required when RUN_LOCAL is true"}), 400
         
@@ -274,7 +285,7 @@ def call_handler(path):
             return jsonify({"error": f"Invalid JSON in request body: {str(e)}"}), 400
 
     # Load secrets from OpenFaaS secret files
-    context.secrets = get_secrets()
+    context.secrets = get_secrets(local_run)
 
     request_data = json.loads(event.body)
     context.scan_execution_id = request_data.get('scanExecutionId')
@@ -298,7 +309,7 @@ def call_handler(path):
         response_data['body']['startedAt'] = started_at
         response_data['body']['completedAt'] = completed_at        
     
-    if context.run_local == "true":
+    if local_run:
         is_valid, error_msg = validate_response(context.function_type, response_data)
         if not is_valid:
             response_data = context.error_response(False, error_msg)
