@@ -1,0 +1,4 @@
+language: golang-middleware
+fprocess: ./handler
+welcome_message: |
+  You have created a Netwrix Access Analyzer Connector function which uses go 1.23 and Alpine Linux as its base image.

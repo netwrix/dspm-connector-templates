@@ -1,0 +1,76 @@
+plugins {
+    id 'java-library'
+    id 'distribution'
+    id 'maven-publish'
+}
+
+dependencies {
+    api 'org.apache.commons:commons-math3:3.6.1'
+    implementation 'com.google.guava:guava:23.0'
+    testImplementation 'junit:junit:4.12'
+    implementation 'com.accessanalyzer:model:0.1.1'
+    implementation 'com.accessanalyzer:entrypoint:0.1.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.2'
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.15.2'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.15.2'
+}
+
+repositories {
+    mavenCentral()
+
+    flatDir {
+        dirs '../libs'
+    }
+}
+
+jar {
+    manifest {
+        attributes 'Implementation-Title': 'Netwrix Access Analyzer Connector Function',
+                   'Implementation-Version': '1.0'
+    }
+}
+
+distributions {
+    main {
+        contents {
+            from jar
+            into('lib') {
+                from(project.configurations.runtimeClasspath)
+            }
+        }
+    }
+}
+
+// Configure publishing with the maven-publish plugin
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            artifact jar
+
+            pom {
+                name.set('Netwrix Access Analyzer Connector Function')
+                description.set('A Netwrix Access Analyzer Connector function implementation.')
+                url.set('https://www.netwrix.com/')
+                developers {
+                    developer {
+                        id.set('netwrix')
+                        name.set('Netwrix')
+                        email.set('ai@netwrix.com')
+                    }
+                }
+                scm {
+                    connection.set('scm:git:https://github.com/netwrix/openfaas-templates.git')
+                    developerConnection.set('scm:git:https://github.com/netwrix/openfaas-templates.git')
+                    url.set('https://github.com/netwrix/openfaas-templates')
+                }
+            }
+        }
+    }
+
+    repositories {
+        flatDir {
+            dirs 'repos'
+        }
+    }
+}
