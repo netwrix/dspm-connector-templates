@@ -168,11 +168,8 @@ def _validate_location_against_columns(location_data, get_object_columns):
     Returns:
         tuple: (is_valid, error_message)
     """
-    expected_columns = []
-    for col_config in get_object_columns:
-        column_name = col_config.get('column')
-        if column_name:
-            expected_columns.append(column_name)
+    # get_object_columns is now a simple array of column names
+    expected_columns = get_object_columns
     
     actual_columns = list(location_data.keys())
     
@@ -515,29 +512,22 @@ def validate_error_response(response_data):
     
     return True, None
 
-def validate_dev_data(config, table, data):
+def validate_dev_data(config, data):
     """
     Validates data for DEV environment against config schema.
     
     Args:
         config (str): JSON configuration string
-        table (str): Table name to validate against
         data (list): Array of data objects to validate
         
     Returns:
         tuple: (is_valid, error_message)
     """
     
-    # Check if table exists in config.intelligence array
-    tables = config.get('intelligence', [])
-    table_config = None
-    for table_def in tables:
-        if table_def.get('name') == table:
-            table_config = table_def
-            break
-    
-    if table_config is None:
-        return False, f"Table '{table}' not found in config.intelligence"
+    # Intelligence is now an array of columns, table name is always 'access'
+    table_columns = config.get('intelligence', [])
+    if not table_columns:
+        return False, "No columns found in config.intelligence"
     
     # Validate data is an array of objects
     if not isinstance(data, list):
@@ -551,16 +541,34 @@ def validate_dev_data(config, table, data):
     if not isinstance(first_object, dict):
         return False, "Data array must contain objects"
     
-    expected_columns = table_config.get('columns', [])
+    # The actual data will have scan_id, scan_execution_id, and scanned_at added by save_data
+    expected_tracking_fields = ['scan_id', 'scan_execution_id', 'scanned_at']
+    expected_column_names = expected_tracking_fields + [col.get('name') for col in table_columns]
+    
     actual_columns = list(first_object.keys())
-    expected_column_names = [col.get('name') for col in expected_columns]
     
     # Check column names match and are in the same order
     if actual_columns != expected_column_names:
         return False, f"Column names/order mismatch. Expected: {expected_column_names}, Got: {actual_columns}"
     
-    # Validate data types for each column
-    for column_def in expected_columns:
+    # Validate tracking fields first
+    tracking_field_types = {
+        'scan_id': 'LowCardinality(String)',
+        'scan_execution_id': 'LowCardinality(String)', 
+        'scanned_at': 'DateTime'
+    }
+    
+    for field_name, field_type in tracking_field_types.items():
+        value = first_object.get(field_name)
+        if value is None:
+            return False, f"Required tracking field '{field_name}' is missing"
+        
+        is_valid, type_error = _validate_clickhouse_type(field_name, field_type, value)
+        if not is_valid:
+            return False, type_error
+    
+    # Validate data types for each column from intelligence config
+    for column_def in table_columns:
         column_name = column_def.get('name')
         expected_type = column_def.get('type')
         nullable = column_def.get('nullable', True)
@@ -574,29 +582,154 @@ def validate_dev_data(config, table, data):
         if value is None and nullable:
             continue
         
-        # Type validation
-        if expected_type == "String":
-            if not isinstance(value, str):
-                return False, f"Column '{column_name}' must be a string, got {type(value).__name__}"
-        elif expected_type == "Integer":
-            if not isinstance(value, int):
-                return False, f"Column '{column_name}' must be an integer, got {type(value).__name__}"
-        elif expected_type == "Boolean":
-            if not isinstance(value, bool):
-                return False, f"Column '{column_name}' must be a boolean, got {type(value).__name__}"
-        elif expected_type == "DateTime":
-            if not isinstance(value, str):
-                return False, f"Column '{column_name}' must be a datetime string, got {type(value).__name__}"
-        elif expected_type == "Array":
-            if not isinstance(value, list):
-                return False, f"Column '{column_name}' must be an array, got {type(value).__name__}"
+        # ClickHouse type validation
+        is_valid, type_error = _validate_clickhouse_type(column_name, expected_type, value)
+        if not is_valid:
+            return False, type_error
+    
+    return True, None
+
+def _validate_clickhouse_type(column_name, expected_type, value):
+    """
+    Validates a value against a ClickHouse data type.
+    
+    Args:
+        column_name (str): Name of the column for error messages
+        expected_type (str): ClickHouse data type string
+        value: The value to validate
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    import re
+    from datetime import datetime
+    
+    # Handle Nullable types
+    if expected_type.startswith('Nullable(') and expected_type.endswith(')'):
+        if value is None:
+            return True, None
+        # Extract inner type for non-null values
+        inner_type = expected_type[9:-1]  # Remove 'Nullable(' and ')'
+        return _validate_clickhouse_type(column_name, inner_type, value)
+    
+    # Handle LowCardinality types
+    if expected_type.startswith('LowCardinality(') and expected_type.endswith(')'):
+        # Extract inner type
+        inner_type = expected_type[15:-1]  # Remove 'LowCardinality(' and ')'
+        return _validate_clickhouse_type(column_name, inner_type, value)
+    
+    # Handle Array types
+    if expected_type.startswith('Array(') and expected_type.endswith(')'):
+        if not isinstance(value, list):
+            return False, f"Column '{column_name}' must be an array, got {type(value).__name__}"
+        
+        # Extract inner type and validate each element
+        inner_type = expected_type[6:-1]  # Remove 'Array(' and ')'
+        for i, item in enumerate(value):
+            is_valid, error = _validate_clickhouse_type(f"{column_name}[{i}]", inner_type, item)
+            if not is_valid:
+                return False, error
+        return True, None
+    
+    # Handle Enum8 types
+    if expected_type.startswith('Enum8(') and expected_type.endswith(')'):
+        if not isinstance(value, str):
+            return False, f"Column '{column_name}' must be a string (enum value), got {type(value).__name__}"
+        
+        # Extract enum values from the type definition
+        enum_part = expected_type[6:-1]  # Remove 'Enum8(' and ')'
+        # Parse enum values like 'SUCCESS' = 1, 'ERROR' = 2
+        enum_values = []
+        for match in re.finditer(r"'([^']+)'\s*=\s*\d+", enum_part):
+            enum_values.append(match.group(1))
+        
+        if enum_values and value not in enum_values:
+            return False, f"Column '{column_name}' must be one of {enum_values}, got '{value}'"
+        return True, None
+    
+    # Handle Nested types
+    if expected_type.startswith('Nested(') and expected_type.endswith(')'):
+        if not isinstance(value, dict):
+            return False, f"Column '{column_name}' must be a nested object (dict), got {type(value).__name__}"
+        
+        # Parse nested structure
+        nested_def = expected_type[7:-1]  # Remove 'Nested(' and ')'
+        # This is a simplified parser - in reality, nested types are more complex
+        # For now, just validate it's a dict with the expected structure
+        return True, None
+    
+    # Handle basic types
+    if expected_type == 'String':
+        if not isinstance(value, str):
+            return False, f"Column '{column_name}' must be a string, got {type(value).__name__}"
+    
+    elif expected_type in ['Int8', 'Int16', 'Int32', 'Int64', 'UInt8', 'UInt16', 'UInt32', 'UInt64']:
+        if not isinstance(value, int):
+            return False, f"Column '{column_name}' must be an integer, got {type(value).__name__}"
+        
+        # Validate integer ranges
+        ranges = {
+            'Int8': (-128, 127),
+            'Int16': (-32768, 32767), 
+            'Int32': (-2147483648, 2147483647),
+            'Int64': (-9223372036854775808, 9223372036854775807),
+            'UInt8': (0, 255),
+            'UInt16': (0, 65535),
+            'UInt32': (0, 4294967295),
+            'UInt64': (0, 18446744073709551615)
+        }
+        
+        if expected_type in ranges:
+            min_val, max_val = ranges[expected_type]
+            if value < min_val or value > max_val:
+                return False, f"Column '{column_name}' value {value} is out of range for {expected_type} ({min_val} to {max_val})"
+    
+    elif expected_type in ['Float32', 'Float64']:
+        if not isinstance(value, (int, float)):
+            return False, f"Column '{column_name}' must be a number, got {type(value).__name__}"
+    
+    elif expected_type == 'Bool':
+        if not isinstance(value, bool):
+            return False, f"Column '{column_name}' must be a boolean, got {type(value).__name__}"
+    
+    elif expected_type == 'DateTime':
+        # Accept both datetime objects and ISO strings
+        if isinstance(value, datetime):
+            return True, None
+        elif isinstance(value, str):
+            # Validate ISO8601 format
+            iso_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?$'
+            if not re.match(iso_pattern, value):
+                return False, f"Column '{column_name}' must be a valid ISO8601 datetime string, got '{value}'"
             
-            # Check array item types if specified
-            items_type = column_def.get('items')
-            if items_type == "String":
-                for item in value:
-                    if not isinstance(item, str):
-                        return False, f"Column '{column_name}' array must contain strings, got {type(item).__name__}"
+            # Try to parse to validate
+            try:
+                # Handle various formats
+                if value.endswith('Z'):
+                    value = value.replace('Z', '+00:00')
+                datetime.fromisoformat(value)
+            except ValueError:
+                return False, f"Column '{column_name}' contains invalid datetime format: '{value}'"
+        else:
+            return False, f"Column '{column_name}' must be a datetime object or ISO8601 string, got {type(value).__name__}"
+    
+    elif expected_type in ['Date', 'Date32']:
+        if isinstance(value, str):
+            # Validate date format YYYY-MM-DD
+            date_pattern = r'^\d{4}-\d{2}-\d{2}$'
+            if not re.match(date_pattern, value):
+                return False, f"Column '{column_name}' must be a valid date string (YYYY-MM-DD), got '{value}'"
+            
+            try:
+                datetime.strptime(value, '%Y-%m-%d')
+            except ValueError:
+                return False, f"Column '{column_name}' contains invalid date: '{value}'"
+        else:
+            return False, f"Column '{column_name}' must be a date string (YYYY-MM-DD), got {type(value).__name__}"
+    
+    else:
+        # For unknown types, just log a warning but don't fail validation
+        print(f"Warning: Unknown ClickHouse type '{expected_type}' for column '{column_name}', skipping type validation", flush=True)
     
     return True, None
 

@@ -63,27 +63,46 @@ class Context:
             "body": {"error": error_msg}
         }
     
-    def save_data(self, table, data):
-        if os.getenv('SAVE_DATA_FUNCTION') == None:
-            error_msg = "SAVE_DATA_FUNCTION is not in the environment"
-            print(error_msg, flush=True)
-            return False, error_msg
+    def save_data(self, data):
+        # Add scan_id, scan_execution_id, and scanned_at to each row
+        enhanced_data = []
+        current_time = datetime.now(timezone.utc).isoformat()
+
+        local_run = self.run_local == "true"
+        scan_id = "scan0001" if local_run else self.scan_id
+        scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
+        
+        for row in data:
+            enhanced_row = {
+                'scan_id': scan_id,
+                'scan_execution_id': scan_execution_id,
+                'scanned_at': current_time,
+                **row  # Spread the original row data
+            }
+            enhanced_data.append(enhanced_row)
         
         # dev environment validation
-        if self.run_local == "true":
-            is_valid, error_msg = validate_dev_data(self.config, table, data)
+        if local_run:
+            is_valid, error_msg = validate_dev_data(self.config, enhanced_data)
             if not is_valid:
                 print(error_msg, flush=True)
                 return False, error_msg
             else:
+                print(f"Saving {len(enhanced_data)} items to table", flush=True)
+                print(f"Sample item: {json.dumps(enhanced_data[0], indent=2)}", flush=True)
                 return True, None
         else:
+            if os.getenv('SAVE_DATA_FUNCTION') == None:
+                error_msg = "SAVE_DATA_FUNCTION is not in the environment"
+                print(error_msg, flush=True)
+                return False, error_msg
+        
             try:
                 payload = {
                     'sourceType': os.getenv('SOURCE_TYPE'),
                     'version': os.getenv('SOURCE_VERSION'),
-                    'table': table,
-                    'data': data
+                    'table': 'access',
+                    'data': enhanced_data
                 }
                 
                 response = requests.post(
@@ -104,12 +123,7 @@ class Context:
                 print(error_msg, flush=True)
                 return False, error_msg
     
-    def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, completed_at=None):
-        if os.getenv('APP_UPDATE_EXECUTION_FUNCTION') == None:
-            error_msg = "APP_UPDATE_EXECUTION_FUNCTION is not in the environment"
-            print(error_msg, flush=True)
-            return False, error_msg
-        
+    def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, completed_at=None):        
         # Validation for dev environment
         if self.run_local == "true":
             is_valid, error_msg = validate_update_execution_params(status, total_objects, completed_objects, increment_completed_objects, completed_at)
@@ -118,54 +132,59 @@ class Context:
                 return False, error_msg
             else:
                 return True, None
-        
-        if self.scan_execution_id != "" and self.scan_execution_id != None:
-            execution_id = self.scan_execution_id
-            execution_type = 'scan'
-        elif self.sync_execution_id != "" and self.sync_execution_id != None:
-            execution_id = self.sync_execution_id
-            execution_type = 'sync'
         else:
-            error_msg = "Missing required field: either 'scanExecutionId' or 'syncExecutionId' must be provided"
-            print(error_msg, flush=True)
-            return False, error_msg
-        
-        try:
-            # Build payload with only provided arguments
-            payload = {
-                'type': execution_type,
-                'executionId': execution_id
-            }
-            
-            # Only include optional fields if they are provided (not None)
-            if status is not None:
-                payload['status'] = status
-            if total_objects is not None:
-                payload['totalObjects'] = total_objects
-            if completed_objects is not None:
-                payload['completedObjects'] = completed_objects
-            if increment_completed_objects is not None:
-                payload['incrementCompletedObjects'] = increment_completed_objects
-            if completed_at is not None:
-                payload['completedAt'] = completed_at
-            
-            response = requests.post(
-                f'{os.getenv("OPENFAAS_GATEWAY")}/async-function/{os.getenv("APP_UPDATE_EXECUTION_FUNCTION")}',
-                json=payload,
-                headers={'Content-Type': 'application/json'},
-                timeout=30
-            )
-            
-            if response.status_code == 202:
-                return True, None
-            else:
-                error_msg = f"Status {response.status_code}: {response.text}"
+            if os.getenv('APP_UPDATE_EXECUTION_FUNCTION') == None:
+                error_msg = "APP_UPDATE_EXECUTION_FUNCTION is not in the environment"
                 print(error_msg, flush=True)
                 return False, error_msg
-        except Exception as e:
-            error_msg = f"Error: {str(e)}"
-            print(error_msg, flush=True)
-            return False, error_msg
+        
+            if self.scan_execution_id != "" and self.scan_execution_id != None:
+                execution_id = self.scan_execution_id
+                execution_type = 'scan'
+            elif self.sync_execution_id != "" and self.sync_execution_id != None:
+                execution_id = self.sync_execution_id
+                execution_type = 'sync'
+            else:
+                error_msg = "Missing required field: either 'scanExecutionId' or 'syncExecutionId' must be provided"
+                print(error_msg, flush=True)
+                return False, error_msg
+            
+            try:
+                # Build payload with only provided arguments
+                payload = {
+                    'type': execution_type,
+                    'executionId': execution_id
+                }
+                
+                # Only include optional fields if they are provided (not None)
+                if status is not None:
+                    payload['status'] = status
+                if total_objects is not None:
+                    payload['totalObjects'] = total_objects
+                if completed_objects is not None:
+                    payload['completedObjects'] = completed_objects
+                if increment_completed_objects is not None:
+                    payload['incrementCompletedObjects'] = increment_completed_objects
+                if completed_at is not None:
+                    payload['completedAt'] = completed_at
+                
+                response = requests.post(
+                    f'{os.getenv("OPENFAAS_GATEWAY")}/async-function/{os.getenv("APP_UPDATE_EXECUTION_FUNCTION")}',
+                    json=payload,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30
+                )
+                
+                if response.status_code == 202:
+                    return True, None
+                else:
+                    error_msg = f"Status {response.status_code}: {response.text}"
+                    print(error_msg, flush=True)
+                    return False, error_msg
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                print(error_msg, flush=True)
+                return False, error_msg
 
 def get_secrets(local_run=False):
     """Read all secrets from OpenFaaS secret mount path and build a dictionary"""
