@@ -29,7 +29,7 @@ class Context:
         self.scan_execution_id = None
         self.sync_execution_id = None
         self.run_local = os.getenv('RUN_LOCAL', 'false')
-        self.config = json.loads(os.getenv('CONFIG'))
+        self.config = json.loads(os.getenv('CONFIG', '{}'))
         self.function_type = os.getenv('FUNCTION_TYPE')
 
     def test_connection_success_response(self):
@@ -113,6 +113,7 @@ class Context:
                 )
                 
                 if response.status_code == 202:
+                    self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
                     return True, None
                 else:
                     error_msg = f"Status {response.status_code}: {response.text}"
@@ -316,6 +317,10 @@ def call_handler(path):
         print(f"Loaded {len(context.secrets)} secrets from secret files", flush=True)
     
     started_at = datetime.now(timezone.utc).isoformat()
+
+    if context.function_type == "access-scan":
+        context.update_execution(status='running')
+
     response_data = handler.handle(event, context)
     completed_at = datetime.now(timezone.utc).isoformat()
 
@@ -324,9 +329,13 @@ def call_handler(path):
     if context.function_type == "test-connection" and response_data['statusCode'] == 200:
         response_data['body']['startedAt'] = started_at
         response_data['body']['completedAt'] = completed_at
-    elif context.function_type == "access-scan" and response_data['statusCode'] == 200:
-        response_data['body']['startedAt'] = started_at
-        response_data['body']['completedAt'] = completed_at        
+    elif context.function_type == "access-scan":
+        if response_data['statusCode'] == 200:
+            response_data['body']['startedAt'] = started_at
+            response_data['body']['completedAt'] = completed_at
+            context.update_execution(status='completed', completed_at=completed_at)
+        else:
+            context.update_execution(status='failed', completed_at=completed_at)
     
     if local_run:
         is_valid, error_msg = validate_response(context.function_type, response_data)
