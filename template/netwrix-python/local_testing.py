@@ -163,13 +163,13 @@ def _validate_location_against_columns(location_data, get_object_columns):
     
     Args:
         location_data (dict): Location data from request
-        get_object_columns (list): List of column configurations
+        get_object_columns (list): List of objects with 'table' and 'column' properties
         
     Returns:
         tuple: (is_valid, error_message)
     """
-    # get_object_columns is now a simple array of column names
-    expected_columns = get_object_columns
+    # Extract column names from the array of objects
+    expected_columns = [col.get('column') for col in get_object_columns if col.get('column')]
     
     actual_columns = list(location_data.keys())
     
