@@ -63,7 +63,7 @@ class Context:
             "body": {"error": error_msg}
         }
     
-    def save_data(self, data):
+    def save_data(self, table, data):
         # Add scan_id, scan_execution_id, and scanned_at to each row
         enhanced_data = []
         current_time = datetime.now(timezone.utc).isoformat()
@@ -101,7 +101,7 @@ class Context:
                 payload = {
                     'sourceType': os.getenv('SOURCE_TYPE'),
                     'version': os.getenv('SOURCE_VERSION'),
-                    'table': 'access',
+                    'table': table,
                     'data': enhanced_data
                 }
                 
