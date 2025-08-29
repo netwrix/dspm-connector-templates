@@ -8,7 +8,7 @@ import json
 import base64
 
 from function import handler
-from local_testing import validate_access_scan_response, validate_dev_data, validate_error_response, validate_request_schema, validate_response, validate_test_connection_response, validate_update_execution_params, validate_get_object_response
+from local_testing import validate_dev_data, validate_request_schema, validate_response, validate_update_execution_params
 
 app = Flask(__name__)
 
@@ -83,7 +83,7 @@ class Context:
         
         # dev environment validation
         if local_run:
-            is_valid, error_msg = validate_dev_data(self.config, enhanced_data)
+            is_valid, error_msg = validate_dev_data(self.config, table, enhanced_data)
             if not is_valid:
                 print(error_msg, flush=True)
                 return False, error_msg

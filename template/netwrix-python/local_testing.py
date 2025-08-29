@@ -512,22 +512,37 @@ def validate_error_response(response_data):
     
     return True, None
 
-def validate_dev_data(config, data):
+def validate_dev_data(config, table, data):
     """
     Validates data for DEV environment against config schema.
     
     Args:
-        config (str): JSON configuration string
+        config (dict): Configuration dictionary
+        table (str): Name of the table for validation
         data (list): Array of data objects to validate
         
     Returns:
         tuple: (is_valid, error_message)
     """
     
-    # Intelligence is now an array of columns, table name is always 'access'
-    table_columns = config.get('intelligence', [])
+    # Look for the specific table in intelligence configuration
+    intelligence = config.get('intelligence', [])
+    if not isinstance(intelligence, list):
+        return False, "config.intelligence must be an array"
+    
+    # Find the table object in the intelligence array
+    table_config = None
+    for table_obj in intelligence:
+        if isinstance(table_obj, dict) and table_obj.get('name') == table:
+            table_config = table_obj
+            break
+    
+    if not table_config:
+        return False, f"Table '{table}' not found in config.intelligence"
+    
+    table_columns = table_config.get('columns', [])
     if not table_columns:
-        return False, "No columns found in config.intelligence"
+        return False, f"No columns found for table '{table}' in config.intelligence"
     
     # Validate data is an array of objects
     if not isinstance(data, list):
