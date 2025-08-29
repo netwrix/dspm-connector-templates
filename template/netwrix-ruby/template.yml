@@ -1,6 +1,0 @@
-language: ruby
-fprocess: ruby index.rb
-build_options:
-  - name: dev
-    packages:
-      - build-essential
