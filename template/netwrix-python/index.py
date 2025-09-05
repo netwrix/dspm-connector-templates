@@ -66,7 +66,7 @@ class Context:
     def save_data(self, table, data):
         # Add scan_id, scan_execution_id, and scanned_at to each row
         enhanced_data = []
-        current_time = datetime.now(timezone.utc).isoformat()
+        current_time = datetime.now(timezone.utc)
 
         local_run = self.run_local == "true"
         scan_id = "scan0001" if local_run else self.scan_id
