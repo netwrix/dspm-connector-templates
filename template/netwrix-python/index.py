@@ -63,7 +63,7 @@ class Context:
             "body": {"error": error_msg}
         }
     
-    def save_data(self, table, data):
+    def save_data(self, table, data, update_status=True):
         # Add scan_id, scan_execution_id, and scanned_at to each row
         enhanced_data = []
         current_time = datetime.now(timezone.utc).isoformat()
@@ -113,7 +113,8 @@ class Context:
                 )
                 
                 if response.status_code == 202:
-                    self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
+                    if update_status:
+                        self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
                     return True, None
                 else:
                     error_msg = f"Status {response.status_code}: {response.text}"
