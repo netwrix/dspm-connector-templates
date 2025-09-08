@@ -324,8 +324,6 @@ def call_handler(path):
     response_data = handler.handle(event, context)
     completed_at = datetime.now(timezone.utc).isoformat()
 
-    print(f"Response data: {response_data}", flush=True)
-
     if context.function_type == "test-connection" and response_data['statusCode'] == 200:
         response_data['body']['startedAt'] = started_at
         response_data['body']['completedAt'] = completed_at
