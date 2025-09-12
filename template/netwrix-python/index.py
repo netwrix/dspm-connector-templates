@@ -64,22 +64,42 @@ class Context:
         }
     
     def save_data(self, table, data, update_status=True):
-        # Add scan_id, scan_execution_id, and scanned_at to each row
+        # Add appropriate IDs and timestamp based on operation type (scan vs sync)
         enhanced_data = []
-        current_time = datetime.now(timezone.utc).isoformat()
+        current_time = datetime.now(timezone.utc)
 
         local_run = self.run_local == "true"
-        scan_id = "scan0001" if local_run else self.scan_id
-        scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
         
-        for row in data:
-            enhanced_row = {
-                'scan_id': scan_id,
-                'scan_execution_id': scan_execution_id,
-                'scanned_at': current_time,
-                **row  # Spread the original row data
-            }
-            enhanced_data.append(enhanced_row)
+        # Check if this is a sync operation
+        is_sync_operation = self.sync_execution_id is not None and self.sync_execution_id != ""
+        
+        if is_sync_operation:
+            # For sync operations - use ClickHouse DateTime format
+            sync_id = "sync0001" if local_run else self.sync_id
+            sync_execution_id = "sync-0002" if local_run else self.sync_execution_id
+            sync_timestamp = current_time.strftime('%Y-%m-%d %H:%M:%S')
+            for row in data:
+                enhanced_row = {
+                    'sync_id': sync_id,
+                    'sync_execution_id': sync_execution_id,
+                    'sync_timestamp': sync_timestamp,
+                    **row  # Spread the original row data
+                }
+                enhanced_data.append(enhanced_row)
+        else:
+            # For scan operations
+            scan_id = "scan0001" if local_run else self.scan_id
+            scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
+            scanned_at = current_time.isoformat()
+            
+            for row in data:
+                enhanced_row = {
+                    'scan_id': scan_id,
+                    'scan_execution_id': scan_execution_id,
+                    'scanned_at': scanned_at,
+                    **row  # Spread the original row data
+                }
+                enhanced_data.append(enhanced_row)
         
         # dev environment validation
         if local_run:
@@ -114,7 +134,11 @@ class Context:
                 
                 if response.status_code == 202:
                     if update_status:
-                        self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
+                        # Use appropriate field names based on operation type
+                        if is_sync_operation:
+                            self.update_execution(status='running', increment_completed_items=len(enhanced_data))
+                        else:
+                            self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
                     return True, None
                 else:
                     error_msg = f"Status {response.status_code}: {response.text}"
@@ -125,7 +149,7 @@ class Context:
                 print(error_msg, flush=True)
                 return False, error_msg
     
-    def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, completed_at=None):        
+    def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, total_items=None, completed_items=None, increment_completed_items=None, completed_at=None):        
         # Validation for dev environment
         if self.run_local == "true":
             is_valid, error_msg = validate_update_execution_params(status, total_objects, completed_objects, increment_completed_objects, completed_at)
@@ -161,17 +185,52 @@ class Context:
                 # Only include optional fields if they are provided (not None)
                 if status is not None:
                     payload['status'] = status
-                if total_objects is not None:
-                    payload['totalObjects'] = total_objects
-                if completed_objects is not None:
-                    payload['completedObjects'] = completed_objects
-                if increment_completed_objects is not None:
-                    payload['incrementCompletedObjects'] = increment_completed_objects
+                
+                # Handle both Items (sync) and Objects (scan) parameter naming
+                # For total count
+                total_value = None
+                if total_items is not None:
+                    total_value = total_items
+                elif total_objects is not None:
+                    total_value = total_objects
+                
+                if total_value is not None:
+                    if execution_type == 'sync':
+                        payload['totalItems'] = total_value
+                    else:
+                        payload['totalObjects'] = total_value
+                
+                # For completed count
+                completed_value = None
+                if completed_items is not None:
+                    completed_value = completed_items
+                elif completed_objects is not None:
+                    completed_value = completed_objects
+                
+                if completed_value is not None:
+                    if execution_type == 'sync':
+                        payload['completedItems'] = completed_value
+                    else:
+                        payload['completedObjects'] = completed_value
+                
+                # For increment completed count
+                increment_value = None
+                if increment_completed_items is not None:
+                    increment_value = increment_completed_items
+                elif increment_completed_objects is not None:
+                    increment_value = increment_completed_objects
+                
+                if increment_value is not None:
+                    if execution_type == 'sync':
+                        payload['incrementCompletedItems'] = increment_value
+                    else:
+                        payload['incrementCompletedObjects'] = increment_value
+                
                 if completed_at is not None:
                     payload['completedAt'] = completed_at
                 
                 response = requests.post(
-                    f'{os.getenv("OPENFAAS_GATEWAY")}/async-function/{os.getenv("APP_UPDATE_EXECUTION_FUNCTION")}',
+                    f'{os.getenv("OPENFAAS_GATEWAY")}/function/{os.getenv("APP_UPDATE_EXECUTION_FUNCTION")}',
                     json=payload,
                     headers={'Content-Type': 'application/json'},
                     timeout=30
@@ -321,6 +380,8 @@ def call_handler(path):
 
     if context.function_type == "access-scan":
         context.update_execution(status='running')
+    elif context.function_type == "sync":
+        context.update_execution(status='running')
 
     response_data = handler.handle(event, context)
     completed_at = datetime.now(timezone.utc).isoformat()
@@ -332,6 +393,15 @@ def call_handler(path):
         if response_data['statusCode'] == 200:
             response_data['body']['startedAt'] = started_at
             response_data['body']['completedAt'] = completed_at
+            context.update_execution(status='completed', completed_at=completed_at)
+        else:
+            context.update_execution(status='failed', completed_at=completed_at)
+    elif context.function_type == "sync":
+        # Handle sync responses and update sync execution status
+        if response_data['statusCode'] == 200:
+            if 'body' in response_data and isinstance(response_data['body'], dict):
+                response_data['body']['startedAt'] = started_at
+                response_data['body']['completedAt'] = completed_at
             context.update_execution(status='completed', completed_at=completed_at)
         else:
             context.update_execution(status='failed', completed_at=completed_at)
