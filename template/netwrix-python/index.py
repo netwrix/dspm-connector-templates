@@ -134,12 +134,8 @@ class Context:
                 
                 if response.status_code == 202:
                     if update_status:
-                        # Use appropriate field names based on operation type
-                        if is_sync_operation:
-                            self.update_execution(status='running', increment_completed_items=len(enhanced_data))
-                        else:
-                            self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
-                    return True, None
+                        self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
+                        return True, None
                 else:
                     error_msg = f"Status {response.status_code}: {response.text}"
                     print(error_msg, flush=True)
@@ -149,7 +145,7 @@ class Context:
                 print(error_msg, flush=True)
                 return False, error_msg
     
-    def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, total_items=None, completed_items=None, increment_completed_items=None, completed_at=None):        
+    def update_execution(self, status=None, total_objects=None, completed_objects=None, increment_completed_objects=None, completed_at=None):        
         # Validation for dev environment
         if self.run_local == "true":
             is_valid, error_msg = validate_update_execution_params(status, total_objects, completed_objects, increment_completed_objects, completed_at)
@@ -164,16 +160,13 @@ class Context:
                 print(error_msg, flush=True)
                 return False, error_msg
         
-            if self.scan_execution_id != "" and self.scan_execution_id != None:
-                execution_id = self.scan_execution_id
-                execution_type = 'scan'
-            elif self.sync_execution_id != "" and self.sync_execution_id != None:
+            if self.function_type == 'sync':
                 execution_id = self.sync_execution_id
                 execution_type = 'sync'
             else:
-                error_msg = "Missing required field: either 'scanExecutionId' or 'syncExecutionId' must be provided"
-                print(error_msg, flush=True)
-                return False, error_msg
+                execution_id = self.scan_execution_id
+                execution_type = 'scan'
+         
             
             try:
                 # Build payload with only provided arguments
@@ -188,43 +181,27 @@ class Context:
                 
                 # Handle both Items (sync) and Objects (scan) parameter naming
                 # For total count
-                total_value = None
-                if total_items is not None:
-                    total_value = total_items
-                elif total_objects is not None:
-                    total_value = total_objects
+              
                 
-                if total_value is not None:
+                if total_objects is not None:
                     if execution_type == 'sync':
-                        payload['totalItems'] = total_value
+                        payload['totalItems'] = total_objects
                     else:
-                        payload['totalObjects'] = total_value
+                        payload['totalObjects'] = total_objects
+            
                 
-                # For completed count
-                completed_value = None
-                if completed_items is not None:
-                    completed_value = completed_items
-                elif completed_objects is not None:
-                    completed_value = completed_objects
-                
-                if completed_value is not None:
+                if completed_objects is not None:
                     if execution_type == 'sync':
-                        payload['completedItems'] = completed_value
+                        payload['completedItems'] = completed_objects
                     else:
-                        payload['completedObjects'] = completed_value
+                        payload['completedObjects'] = completed_objects
                 
-                # For increment completed count
-                increment_value = None
-                if increment_completed_items is not None:
-                    increment_value = increment_completed_items
-                elif increment_completed_objects is not None:
-                    increment_value = increment_completed_objects
                 
-                if increment_value is not None:
+                if increment_completed_objects is not None:
                     if execution_type == 'sync':
-                        payload['incrementCompletedItems'] = increment_value
+                        payload['incrementCompletedItems'] = increment_completed_objects
                     else:
-                        payload['incrementCompletedObjects'] = increment_value
+                        payload['incrementCompletedObjects'] = increment_completed_objects
                 
                 if completed_at is not None:
                     payload['completedAt'] = completed_at
