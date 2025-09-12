@@ -77,12 +77,12 @@ class Context:
             # For sync operations - use ClickHouse DateTime format
             sync_id = "sync0001" if local_run else self.sync_id
             sync_execution_id = "sync-0002" if local_run else self.sync_execution_id
-            sync_timestamp = current_time
+            synced_at = current_time
             for row in data:
                 enhanced_row = {
                     'sync_id': sync_id,
                     'sync_execution_id': sync_execution_id,
-                    'sync_timestamp': sync_timestamp,
+                    'synced_at': synced_at,
                     **row  # Spread the original row data
                 }
                 enhanced_data.append(enhanced_row)
