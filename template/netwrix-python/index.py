@@ -66,7 +66,7 @@ class Context:
     def save_data(self, table, data, update_status=True):
         # Add appropriate IDs and timestamp based on operation type (scan vs sync)
         enhanced_data = []
-        current_time = datetime.now(timezone.utc)
+        current_time = datetime.now(timezone.utc).isoformat()
 
         local_run = self.run_local == "true"
         
@@ -77,7 +77,7 @@ class Context:
             # For sync operations - use ClickHouse DateTime format
             sync_id = "sync0001" if local_run else self.sync_id
             sync_execution_id = "sync-0002" if local_run else self.sync_execution_id
-            sync_timestamp = current_time.strftime('%Y-%m-%d %H:%M:%S')
+            sync_timestamp = current_time
             for row in data:
                 enhanced_row = {
                     'sync_id': sync_id,
@@ -90,7 +90,7 @@ class Context:
             # For scan operations
             scan_id = "scan0001" if local_run else self.scan_id
             scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
-            scanned_at = current_time.isoformat()
+            scanned_at = current_time
             
             for row in data:
                 enhanced_row = {
