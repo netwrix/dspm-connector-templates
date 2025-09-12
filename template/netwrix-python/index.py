@@ -64,22 +64,42 @@ class Context:
         }
     
     def save_data(self, table, data, update_status=True):
-        # Add scan_id, scan_execution_id, and scanned_at to each row
+        # Add appropriate IDs and timestamp based on operation type (scan vs sync)
         enhanced_data = []
         current_time = datetime.now(timezone.utc).isoformat()
 
         local_run = self.run_local == "true"
-        scan_id = "scan0001" if local_run else self.scan_id
-        scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
         
-        for row in data:
-            enhanced_row = {
-                'scan_id': scan_id,
-                'scan_execution_id': scan_execution_id,
-                'scanned_at': current_time,
-                **row  # Spread the original row data
-            }
-            enhanced_data.append(enhanced_row)
+        # Check if this is a sync operation
+        is_sync_operation = self.function_type == 'sync'
+        
+        if is_sync_operation:
+            # For sync operations - use ClickHouse DateTime format
+            sync_id = "sync0001" if local_run else self.sync_id
+            sync_execution_id = "sync-0002" if local_run else self.sync_execution_id
+            synced_at = current_time
+            for row in data:
+                enhanced_row = {
+                    'sync_id': sync_id,
+                    'sync_execution_id': sync_execution_id,
+                    'synced_at': synced_at,
+                    **row  # Spread the original row data
+                }
+                enhanced_data.append(enhanced_row)
+        else:
+            # For scan operations
+            scan_id = "scan0001" if local_run else self.scan_id
+            scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
+            scanned_at = current_time
+            
+            for row in data:
+                enhanced_row = {
+                    'scan_id': scan_id,
+                    'scan_execution_id': scan_execution_id,
+                    'scanned_at': scanned_at,
+                    **row  # Spread the original row data
+                }
+                enhanced_data.append(enhanced_row)
         
         # dev environment validation
         if local_run:
@@ -140,16 +160,13 @@ class Context:
                 print(error_msg, flush=True)
                 return False, error_msg
         
-            if self.scan_execution_id != "" and self.scan_execution_id != None:
-                execution_id = self.scan_execution_id
-                execution_type = 'scan'
-            elif self.sync_execution_id != "" and self.sync_execution_id != None:
+            if self.function_type == 'sync':
                 execution_id = self.sync_execution_id
                 execution_type = 'sync'
             else:
-                error_msg = "Missing required field: either 'scanExecutionId' or 'syncExecutionId' must be provided"
-                print(error_msg, flush=True)
-                return False, error_msg
+                execution_id = self.scan_execution_id
+                execution_type = 'scan'
+         
             
             try:
                 # Build payload with only provided arguments
@@ -161,17 +178,36 @@ class Context:
                 # Only include optional fields if they are provided (not None)
                 if status is not None:
                     payload['status'] = status
+                
+                # Handle both Items (sync) and Objects (scan) parameter naming
+                # For total count
+              
+                
                 if total_objects is not None:
-                    payload['totalObjects'] = total_objects
+                    if execution_type == 'sync':
+                        payload['totalItems'] = total_objects
+                    else:
+                        payload['totalObjects'] = total_objects
+            
+                
                 if completed_objects is not None:
-                    payload['completedObjects'] = completed_objects
+                    if execution_type == 'sync':
+                        payload['completedItems'] = completed_objects
+                    else:
+                        payload['completedObjects'] = completed_objects
+                
+                
                 if increment_completed_objects is not None:
-                    payload['incrementCompletedObjects'] = increment_completed_objects
+                    if execution_type == 'sync':
+                        payload['incrementCompletedItems'] = increment_completed_objects
+                    else:
+                        payload['incrementCompletedObjects'] = increment_completed_objects
+                
                 if completed_at is not None:
                     payload['completedAt'] = completed_at
                 
                 response = requests.post(
-                    f'{os.getenv("OPENFAAS_GATEWAY")}/async-function/{os.getenv("APP_UPDATE_EXECUTION_FUNCTION")}',
+                    f'{os.getenv("OPENFAAS_GATEWAY")}/function/{os.getenv("APP_UPDATE_EXECUTION_FUNCTION")}',
                     json=payload,
                     headers={'Content-Type': 'application/json'},
                     timeout=30
@@ -319,7 +355,7 @@ def call_handler(path):
     
     started_at = datetime.now(timezone.utc).isoformat()
 
-    if context.function_type == "access-scan":
+    if context.function_type == "access-scan" or context.function_type == "sync":
         context.update_execution(status='running')
 
     response_data = handler.handle(event, context)
@@ -328,7 +364,7 @@ def call_handler(path):
     if context.function_type == "test-connection" and response_data['statusCode'] == 200:
         response_data['body']['startedAt'] = started_at
         response_data['body']['completedAt'] = completed_at
-    elif context.function_type == "access-scan":
+    elif context.function_type == "access-scan" or context.function_type == "sync":
         if response_data['statusCode'] == 200:
             response_data['body']['startedAt'] = started_at
             response_data['body']['completedAt'] = completed_at
