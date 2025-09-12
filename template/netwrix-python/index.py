@@ -71,7 +71,7 @@ class Context:
         local_run = self.run_local == "true"
         
         # Check if this is a sync operation
-        is_sync_operation = self.sync_execution_id is not None and self.sync_execution_id != ""
+        is_sync_operation = self.function_type == 'sync'
         
         if is_sync_operation:
             # For sync operations - use ClickHouse DateTime format
@@ -135,7 +135,7 @@ class Context:
                 if response.status_code == 202:
                     if update_status:
                         self.update_execution(status='running', increment_completed_objects=len(enhanced_data))
-                        return True, None
+                    return True, None
                 else:
                     error_msg = f"Status {response.status_code}: {response.text}"
                     print(error_msg, flush=True)
@@ -355,9 +355,7 @@ def call_handler(path):
     
     started_at = datetime.now(timezone.utc).isoformat()
 
-    if context.function_type == "access-scan":
-        context.update_execution(status='running')
-    elif context.function_type == "sync":
+    if context.function_type == "access-scan" or context.function_type == "sync":
         context.update_execution(status='running')
 
     response_data = handler.handle(event, context)
@@ -366,19 +364,10 @@ def call_handler(path):
     if context.function_type == "test-connection" and response_data['statusCode'] == 200:
         response_data['body']['startedAt'] = started_at
         response_data['body']['completedAt'] = completed_at
-    elif context.function_type == "access-scan":
+    elif context.function_type == "access-scan" or context.function_type == "sync":
         if response_data['statusCode'] == 200:
             response_data['body']['startedAt'] = started_at
             response_data['body']['completedAt'] = completed_at
-            context.update_execution(status='completed', completed_at=completed_at)
-        else:
-            context.update_execution(status='failed', completed_at=completed_at)
-    elif context.function_type == "sync":
-        # Handle sync responses and update sync execution status
-        if response_data['statusCode'] == 200:
-            if 'body' in response_data and isinstance(response_data['body'], dict):
-                response_data['body']['startedAt'] = started_at
-                response_data['body']['completedAt'] = completed_at
             context.update_execution(status='completed', completed_at=completed_at)
         else:
             context.update_execution(status='failed', completed_at=completed_at)
