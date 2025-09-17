@@ -381,4 +381,12 @@ def call_handler(path):
     return resp
 
 if __name__ == '__main__':
-    serve(app, host='0.0.0.0', port=5000)
+
+    if os.getenv('DEBUG_MODE', 'false').lower() == 'true':
+        import debugpy
+
+        debugpy.listen(5678)
+        debugpy.wait_for_client()
+        app.run(host='0.0.0.0', port=5000, debug=True, use_debugger=False)
+    else:
+        serve(app, host='0.0.0.0', port=5000)
