@@ -1,6 +1,6 @@
 flask
 waitress
 tox==3.*
-requests==2.31.0
+requests==2.32.4
 
 debugpy
