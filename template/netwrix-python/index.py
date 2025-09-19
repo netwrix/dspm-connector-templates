@@ -3,6 +3,7 @@ import base64
 import json
 import os
 from datetime import UTC, datetime
+from logging.config import dictConfig
 
 import requests
 from flask import Flask, jsonify, request
@@ -14,6 +15,25 @@ from local_testing import (
     validate_request_schema,
     validate_response,
     validate_update_execution_params,
+)
+
+dictConfig(
+    {
+        "version": 1,
+        "formatters": {
+            "default": {
+                "format": "[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+            }
+        },
+        "handlers": {
+            "wsgi": {
+                "class": "logging.StreamHandler",
+                "stream": "ext://flask.logging.wsgi_errors_stream",
+                "formatter": "default",
+            }
+        },
+        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["wsgi"]},
+    }
 )
 
 app = Flask(__name__)
@@ -221,7 +241,7 @@ class Context:
             return False, error_msg
 
 
-def get_secrets(local_run=False):
+def get_secrets(local_run: bool = False) -> dict[str, str]:
     """Read all secrets from OpenFaaS secret mount path and build a dictionary"""
     secrets_dict: dict[str, str] = {}
     secrets_dir = "/var/openfaas/secrets/"
@@ -383,10 +403,17 @@ def call_handler(path: str):
 
 if __name__ == "__main__":
     if os.getenv("DEBUG_MODE", "false").lower() == "true":
-        import debugpy  # noqa: T100
+        try:
+            import pydevd_pycharm
 
-        debugpy.listen(5678)  # noqa: T100
-        debugpy.wait_for_client()  # noqa: T100
+            pydevd_pycharm.settrace("host.docker.internal", port=5678, stdout_to_server=True, stderr_to_server=True)
+        except ImportError:
+            app.logger.error("pydevd_pycharm module not found, continuing without debugger")
+        except ConnectionRefusedError:
+            app.logger.error(
+                "Connection to debugger failed, ensure pycharm is running with the debugger or set DEBUG_MODE to false"
+            )
+
         app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False)
     else:
         serve(app, host="0.0.0.0", port=5000)

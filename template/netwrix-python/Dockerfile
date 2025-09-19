@@ -6,6 +6,7 @@ RUN chmod +x /usr/bin/fwatchdog
 
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
+ARG DEBUG_MODE="false"
 
 RUN --mount=type=cache,target=/var/cache/apk \
     if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk upgrade; fi && \
@@ -17,16 +18,13 @@ RUN chown app /home/app
 
 USER app
 
-ENV PATH=$PATH:/home/app/.local/bin \
+ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_FROZEN=true \
-    UV_NO_EDITABLE=true \
-    UV_NO_MANAGED_PYTHON=true \
-    UV_COMPILE_BYTECODE=true \
-    UV_SYSTEM_PYTHON=true \
+    UV_LINK_MODE=copy \
     UV_CACHE_DIR=/var/cache/uv \
-    UV_PROJECT_ENVIRONMENT=/usr/local/
+    DEBUG_MODE=${DEBUG_MODE}
 
 # Template specific steps
 WORKDIR /home/app/
@@ -37,7 +35,11 @@ COPY --chown=app:app uv.lock            .
 USER root
 RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
-    uv sync
+    uv export --no-dev --format requirements-txt -o requirements.txt && \
+    touch requirements-dev.txt; \
+    if [ "$DEBUG_MODE" = "true" ]; then \
+      uv export --only-dev --format requirements-txt -o requirements-dev.txt; \
+    fi
 
 
 # Build the function directory and install any user-specified components
@@ -46,14 +48,13 @@ USER app
 RUN mkdir -p function
 RUN touch ./function/__init__.py
 WORKDIR /home/app/function/
-COPY --chown=app:app function/pyproject.toml    .
-COPY --chown=app:app function/uv.lock           .
+COPY --chown=app:app function/requirements.txt  .
 
 # install function code
 USER root
 RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
-    uv sync
+    uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
 COPY --chown=app:app function/   .
 
