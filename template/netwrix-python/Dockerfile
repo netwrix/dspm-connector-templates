@@ -1,16 +1,16 @@
 ARG PYTHON_VERSION=3.12
-FROM --platform=${TARGETPLATFORM:-linux/amd64} ghcr.io/openfaas/of-watchdog:0.10.7 AS watchdog
 FROM --platform=${TARGETPLATFORM:-linux/amd64} python:${PYTHON_VERSION}-alpine AS build
 
-COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
+COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
 
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
-# Alternatively use ADD https:// (which will not be cached by Docker builder)
+ARG DEBUG_MODE="false"
 
-RUN if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk --no-cache upgrade; fi && \
-    apk --no-cache add ${ADDITIONAL_PACKAGE}
+RUN --mount=type=cache,target=/var/cache/apk \
+    if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk upgrade; fi && \
+    apk add ${ADDITIONAL_PACKAGE}
 
 # Add non root user
 RUN addgroup -S app && adduser app -S -G app
@@ -18,14 +18,29 @@ RUN chown app /home/app
 
 USER app
 
-ENV PATH=$PATH:/home/app/.local/bin
+ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_FROZEN=true \
+    UV_LINK_MODE=copy \
+    UV_CACHE_DIR=/var/cache/uv \
+    DEBUG_MODE=${DEBUG_MODE}
 
+# Template specific steps
 WORKDIR /home/app/
 COPY --chown=app:app local_testing.py   .
 COPY --chown=app:app index.py           .
-COPY --chown=app:app requirements.txt   .
+COPY --chown=app:app pyproject.toml     .
+COPY --chown=app:app uv.lock            .
 USER root
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
+    --mount=type=cache,target=/var/cache/uv/ \
+    uv export --no-dev --format requirements-txt -o requirements.txt && \
+    touch requirements-dev.txt; \
+    if [ "$DEBUG_MODE" = "true" ]; then \
+      uv export --only-dev --format requirements-txt -o requirements-dev.txt; \
+    fi
+
 
 # Build the function directory and install any user-specified components
 USER app
@@ -33,11 +48,14 @@ USER app
 RUN mkdir -p function
 RUN touch ./function/__init__.py
 WORKDIR /home/app/function/
-COPY --chown=app:app function/requirements.txt	.
-RUN pip install --no-cache-dir --user -r requirements.txt
+COPY --chown=app:app function/requirements.txt  .
 
 # install function code
 USER root
+RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
+    --mount=type=cache,target=/var/cache/uv/ \
+    uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
+
 COPY --chown=app:app function/   .
 
 FROM build AS test
