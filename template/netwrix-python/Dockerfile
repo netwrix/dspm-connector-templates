@@ -28,7 +28,6 @@ ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
 
 # Template specific steps
 WORKDIR /home/app/
-COPY --chown=app:app local_testing.py   .
 COPY --chown=app:app index.py           .
 COPY --chown=app:app pyproject.toml     .
 COPY --chown=app:app uv.lock            .
