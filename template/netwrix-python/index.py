@@ -10,12 +10,7 @@ from flask import Flask, jsonify, request
 from waitress import serve
 
 from function import handler
-from local_testing import (
-    validate_dev_data,
-    validate_request_schema,
-    validate_response,
-    validate_update_execution_params,
-)
+
 
 dictConfig(
     {
