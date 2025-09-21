@@ -28,7 +28,6 @@ ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
 
 # Template specific steps
 WORKDIR /home/app/
-COPY --chown=app:app local_testing.py   .
 COPY --chown=app:app index.py           .
 COPY --chown=app:app pyproject.toml     .
 COPY --chown=app:app uv.lock            .
@@ -57,11 +56,6 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
 COPY --chown=app:app function/   .
-
-FROM build AS test
-ARG TEST_COMMAND=tox
-ARG TEST_ENABLED=true
-RUN [ "$TEST_ENABLED" = "false" ] && echo "skipping tests" || eval "$TEST_COMMAND"
 
 FROM build AS ship
 WORKDIR /home/app/
