@@ -45,14 +45,12 @@ class Event:
 
 class Context:
     def __init__(self):
-        self.hostname: str = os.getenv("HOSTNAME", "localhost")
         self.secrets: dict[str, str] | None = None
         self.scan_id: str | None = os.getenv("SCAN_ID")
         self.sync_id: str | None = os.getenv("SYNC_ID")
         self.scan_execution_id: str | None = None
         self.sync_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
-        self.config: str = json.loads(os.getenv("CONFIG", "{}"))
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
 
     def test_connection_success_response(self):
@@ -83,8 +81,8 @@ class Context:
 
         if is_sync_operation:
             # For sync operations - use ClickHouse DateTime format
-            sync_id = "sync0001" if local_run else self.sync_id
-            sync_execution_id = "sync-0002" if local_run else self.sync_execution_id
+            sync_id = self.sync_id
+            sync_execution_id = self.sync_execution_id
             synced_at = current_time
             for row in data:
                 enhanced_row = {
@@ -96,8 +94,8 @@ class Context:
                 enhanced_data.append(enhanced_row)
         else:
             # For scan operations
-            scan_id = "scan0001" if local_run else self.scan_id
-            scan_execution_id = "scan-0002" if local_run else self.scan_execution_id
+            scan_id = self.scan_id
+            scan_execution_id = self.scan_execution_id
             scanned_at = current_time
 
             for row in data:
@@ -109,20 +107,6 @@ class Context:
                 }
                 enhanced_data.append(enhanced_row)
 
-        # dev environment validation
-        if local_run:
-            is_valid, error_msg = validate_dev_data(self.config, table, enhanced_data)
-            if not is_valid:
-                print(error_msg, flush=True)
-                return False, error_msg
-            print(f"Saving {len(enhanced_data)} items to table", flush=True)
-            print(f"Sample item: {json.dumps(enhanced_data[0], indent=2)}", flush=True)
-            return True, None
-        if os.getenv("SAVE_DATA_FUNCTION") is None:
-            error_msg = "SAVE_DATA_FUNCTION is not in the environment"
-            print(error_msg, flush=True)
-            return False, error_msg
-
         try:
             payload = {
                 "sourceType": os.getenv("SOURCE_TYPE"),
@@ -131,12 +115,21 @@ class Context:
                 "data": enhanced_data,
             }
 
-            response = requests.post(
-                f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=30,
-            )
+            if local_run:
+                ## call to local docker container function
+                response = requests.post(
+                    "http://localhost:8483/",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+            else:
+                response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
 
             if response.status_code == 202:
                 if update_status:
@@ -161,23 +154,6 @@ class Context:
         increment_completed_objects=None,
         completed_at=None,
     ):
-        # Validation for dev environment
-        if self.run_local == "true":
-            is_valid, error_msg = validate_update_execution_params(
-                status,
-                total_objects,
-                completed_objects,
-                increment_completed_objects,
-                completed_at,
-            )
-            if not is_valid:
-                print(error_msg, flush=True)
-                return False, error_msg
-            return True, None
-        if os.getenv("APP_UPDATE_EXECUTION_FUNCTION") is None:
-            error_msg = "APP_UPDATE_EXECUTION_FUNCTION is not in the environment"
-            print(error_msg, flush=True)
-            return False, error_msg
 
         if self.function_type == "sync":
             execution_id = self.sync_execution_id
@@ -218,12 +194,20 @@ class Context:
             if completed_at is not None:
                 payload["completedAt"] = completed_at
 
-            response = requests.post(
-                f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=30,
-            )
+            if local_run:
+                response = requests.post(
+                    f"http://localhost:8481",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+            else:
+                response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
 
             if response.status_code == 202:
                 return True, None
@@ -338,25 +322,6 @@ def call_handler(path: str):
 
     local_run = context.run_local == "true"
 
-    if local_run:
-        if context.config is None:
-            return jsonify({"error": "CONFIG is required when RUN_LOCAL is true"}), 400
-
-        if context.function_type is None:
-            return jsonify({"error": "FUNCTION_TYPE is required when RUN_LOCAL is true"}), 400
-
-        try:
-            # Validate request body against config
-            request_data = json.loads(event.body)
-            is_valid, error_msg = validate_request_schema(context.config, request_data, context.function_type)
-            if not is_valid:
-                return jsonify({"error": error_msg}), 400
-
-        except json.JSONDecodeError as e:
-            return jsonify({"error": f"Invalid JSON in CONFIG: {str(e)}"}), 400
-        except Exception as e:
-            return jsonify({"error": f"Invalid JSON in request body: {str(e)}"}), 400
-
     # Load secrets from OpenFaaS secret files
     context.secrets = get_secrets(local_run)
 
@@ -388,27 +353,24 @@ def call_handler(path: str):
         else:
             context.update_execution(status="failed", completed_at=completed_at)
 
-    if local_run:
-        is_valid, error_msg = validate_response(context.function_type, response_data)
-        if not is_valid:
-            response_data = context.error_response(False, error_msg)
-
     return format_response(response_data)
 
 
 if __name__ == "__main__":
     if os.getenv("DEBUG_MODE", "false").lower() == "true":
         try:
-            import pydevd_pycharm
+            import debugpy
 
-            pydevd_pycharm.settrace("host.docker.internal", port=5678, stdout_to_server=True, stderr_to_server=True)
+            debugpy.listen((os.getenv("DEBUG_HOST", "0.0.0.0"), int(os.getenv("DEBUG_PORT", 5678))))
+            print("Debugger listening on {}:{}".format(os.getenv("DEBUG_HOST", "0.0.0.0"), os.getenv("DEBUG_PORT", 5678)))
+            debugpy.wait_for_client()
         except ImportError:
-            app.logger.error("pydevd_pycharm module not found, continuing without debugger")
-        except ConnectionRefusedError:
+            app.logger.error("debugpy module not found, continuing without debugger")
+        except Exception as e:
             app.logger.error(
-                "Connection to debugger failed, ensure pycharm is running with the debugger or set DEBUG_MODE to false"
+                f"Connection to debugger failed: {str(e)}. Ensure your debugger is configured correctly or set DEBUG_MODE to false"
             )
 
-        app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False)
+        app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False, use_reloader=False)
     else:
         serve(app, host="0.0.0.0", port=5000)
