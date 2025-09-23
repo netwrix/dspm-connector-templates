@@ -155,6 +155,8 @@ class Context:
         completed_at=None,
     ):
 
+        local_run = self.run_local == "true"
+
         if self.function_type == "sync":
             execution_id = self.sync_execution_id
             execution_type = "sync"
