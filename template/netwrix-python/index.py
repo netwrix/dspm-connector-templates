@@ -118,7 +118,7 @@ class Context:
             if local_run:
                 ## call to local docker container function
                 response = requests.post(
-                    "http://localhost:8483/",
+                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8483",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
@@ -131,7 +131,7 @@ class Context:
                     timeout=30,
                 )
 
-            if response.status_code == 202:
+            if response.status_code == 202 or (local_run and response.status_code == 200):
                 if update_status:
                     self.update_execution(
                         status="running",
@@ -196,7 +196,7 @@ class Context:
 
             if local_run:
                 response = requests.post(
-                    f"http://localhost:8481",
+                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8481",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
@@ -209,7 +209,7 @@ class Context:
                     timeout=30,
                 )
 
-            if response.status_code == 202:
+            if response.status_code == 202 or (local_run and response.status_code == 200):
                 return True, None
             error_msg = f"Status {response.status_code}: {response.text}"
             print(error_msg, flush=True)
