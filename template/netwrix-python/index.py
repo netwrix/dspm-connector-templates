@@ -118,7 +118,7 @@ class Context:
             if local_run:
                 ## call to local docker container function
                 response = requests.post(
-                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8483",
+                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
@@ -196,7 +196,7 @@ class Context:
 
             if local_run:
                 response = requests.post(
-                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8481",
+                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
