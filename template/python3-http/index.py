@@ -35,7 +35,6 @@ app = Flask(__name__)
 class Event:
     def __init__(self):
         self.body = request.get_data()
-        self.run_local = os.getenv("RUN_LOCAL", "false")
         self.headers = request.headers
         self.method = request.method
         self.query = request.args
