@@ -1,4 +1,4 @@
-language: netwrix-python
+language: python-connector
 fprocess: python index.py
 build_options:
   - name: dev
