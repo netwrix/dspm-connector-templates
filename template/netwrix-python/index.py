@@ -172,26 +172,17 @@ class Context:
             if status is not None:
                 payload["status"] = status
 
-            # Handle both Items (sync) and Objects (scan) parameter naming
-            # For total count
-
+            # Both scan and sync operations will use the *objects parameters when updating the execution status.
+            # app-update-execution function expects the parameter to be named totalObjects
+            # and it will use the correct column name depending on if it's a scan or sync operation.
             if total_objects is not None:
-                if execution_type == "sync":
-                    payload["totalItems"] = total_objects
-                else:
-                    payload["totalObjects"] = total_objects
+                payload["totalObjects"] = total_objects
 
             if completed_objects is not None:
-                if execution_type == "sync":
-                    payload["completedItems"] = completed_objects
-                else:
-                    payload["completedObjects"] = completed_objects
+                payload["completedObjects"] = completed_objects
 
             if increment_completed_objects is not None:
-                if execution_type == "sync":
-                    payload["incrementCompletedItems"] = increment_completed_objects
-                else:
-                    payload["incrementCompletedObjects"] = increment_completed_objects
+                payload["incrementCompletedObjects"] = increment_completed_objects
 
             if completed_at is not None:
                 payload["completedAt"] = completed_at
