@@ -34,7 +34,9 @@ dictConfig(
     }
 )
 
-SERVICE_NAME: Final = os.getenv("SERVICE_NAME", __name__)
+SOURCE_TYPE: Final = os.getenv("SOURCE_TYPE", "internal")
+FUNCTION_TYPE: Final = os.getenv("FUNCTION_TYPE", "netwrix")
+SERVICE_NAME: Final = os.getenv("SERVICE_NAME", f"{SOURCE_TYPE}-{FUNCTION_TYPE}")
 app = Flask(SERVICE_NAME)
 
 
