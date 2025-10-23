@@ -13,8 +13,6 @@ from opentelemetry import metrics, trace
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
-from function import handler
-
 dictConfig(
     {
         "version": 1,
@@ -124,6 +122,9 @@ def get_logger(name: str):
 setup_opentelemetry(app)
 tracer = trace.get_tracer(__name__)
 logger = get_logger(__name__)
+
+# setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
+from function import handler  # noqa: E402
 
 
 class Event:
@@ -522,7 +523,9 @@ def call_handler(path: str):
             with tracer.start_as_current_span("format_response"):
                 resp = format_response(response_data)
 
-            status_code = response_data.get("statusCode", 200)
+            status_code = 200
+            if isinstance(resp, tuple) and len(resp) >= 2:
+                status_code = resp[1]
             span.set_attribute("http.status_code", status_code)
             span.set_status(StatusCode.OK)
             context.log.info("Request completed", http_status_code=status_code)

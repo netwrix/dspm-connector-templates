@@ -9,7 +9,6 @@ from opentelemetry import metrics, trace
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
-from function import handler
 
 dictConfig(
     {
@@ -118,6 +117,9 @@ def get_logger(name: str):
 setup_opentelemetry(app)
 logger = get_logger(SERVICE_NAME)
 tracer = get_tracer(SERVICE_NAME)
+
+# setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
+from function import handler  # noqa: E402
 
 
 class Event:
