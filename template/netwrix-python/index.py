@@ -1,16 +1,19 @@
 #!/usr/bin/env python
 import base64
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from logging.config import dictConfig
+from typing import Final
 
 import requests
 from flask import Flask, jsonify, request
+from opentelemetry import metrics, trace
+from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
 from function import handler
-
 
 dictConfig(
     {
@@ -31,7 +34,96 @@ dictConfig(
     }
 )
 
-app = Flask(__name__)
+SOURCE_TYPE: Final = os.getenv("SOURCE_TYPE", "internal")
+FUNCTION_TYPE: Final = os.getenv("FUNCTION_TYPE", "netwrix")
+SERVICE_NAME: Final = os.getenv("SERVICE_NAME", f"{SOURCE_TYPE}-{FUNCTION_TYPE}")
+app = Flask(SERVICE_NAME)
+
+
+def setup_opentelemetry(app: object | None = None) -> None:
+    """
+    Initialize OpenTelemetry instrumentation for traces, metrics, and logs.
+
+    Returns:
+        bool: True if setup succeeded, False otherwise
+    """
+    if os.getenv("OTEL_ENABLED", "true").lower() != "true":
+        logging.info("OpenTelemetry disabled via OTEL_ENABLED environment variable")
+        return
+
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    try:
+        otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4318")
+
+        resource = Resource.create(
+            {
+                "service.name": SERVICE_NAME,
+                "service.namespace": "dspm-functions",
+                "deployment.environment": os.getenv("ENVIRONMENT", "development"),
+            }
+        )
+
+        trace_provider = TracerProvider(resource=resource)
+        trace_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{otel_endpoint}/v1/traces"))
+        trace_provider.add_span_processor(trace_processor)
+        trace.set_tracer_provider(trace_provider)
+
+        metric_reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=f"{otel_endpoint}/v1/metrics"), export_interval_millis=60000
+        )
+        metric_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+        metrics.set_meter_provider(metric_provider)
+
+        logger_provider = LoggerProvider(resource=resource)
+        log_processor = BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{otel_endpoint}/v1/logs"))
+        logger_provider.add_log_record_processor(log_processor)
+        set_logger_provider(logger_provider)
+
+        handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+        logging.getLogger().addHandler(handler)
+
+        if app is not None:
+            FlaskInstrumentor().instrument_app(app)
+
+        RequestsInstrumentor().instrument()
+
+        logging.info("OpenTelemetry initialized")
+
+    except Exception:
+        logging.exception("Failed to initialize OpenTelemetry")
+
+
+def get_tracer(name: str):
+    """Get a tracer for manual instrumentation"""
+    return trace.get_tracer(name)
+
+
+def get_meter(name: str):
+    """Get a meter for custom metrics"""
+    return metrics.get_meter(name)
+
+
+def get_logger(name: str):
+    """Get a logger that emits to OpenTelemetry"""
+    return logging.getLogger(name)
+
+
+setup_opentelemetry(app)
+tracer = trace.get_tracer(__name__)
+logger = get_logger(__name__)
 
 
 class Event:
@@ -52,6 +144,8 @@ class Context:
         self.sync_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
+
+        self.log = ContextLogger(self)
 
     def test_connection_success_response(self):
         return {"statusCode": 200, "body": {}}
@@ -139,11 +233,11 @@ class Context:
                     )
                 return True, None
             error_msg = f"Status {response.status_code}: {response.text}"
-            print(error_msg, flush=True)
+            self.log.error(error_msg)
             return False, error_msg
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            print(error_msg, flush=True)
+            self.log.error(error_msg, error_type=type(e).__name__)
             return False, error_msg
 
     def update_execution(
@@ -154,7 +248,6 @@ class Context:
         increment_completed_objects=None,
         completed_at=None,
     ):
-
         local_run = self.run_local == "true"
 
         if self.function_type == "sync":
@@ -205,15 +298,65 @@ class Context:
             if response.status_code == 202 or (local_run and response.status_code == 200):
                 return True, None
             error_msg = f"Status {response.status_code}: {response.text}"
-            print(error_msg, flush=True)
+            self.log.error(error_msg)
             return False, error_msg
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            print(error_msg, flush=True)
+            self.log.error(error_msg)
             return False, error_msg
 
 
-def get_secrets(local_run: bool = False) -> dict[str, str]:
+class ContextLogger:
+    def __init__(self, context: Context):
+        self.context = context
+
+    def __call__(self, level: int, message: str, event_type: str = "operation", **attributes):
+        self.log(level, message, event_type, **attributes)
+
+    def log(self, level: int, message: str, event_type: str = "operation", **attributes):
+        """
+        Log with automatic context enrichment and trace correlation.
+
+        Args:
+            level: logging level (logging.INFO, logging.ERROR, etc.)
+            message: Log message
+            event_type: Type of event (operation, admin, audit, error)
+            **attributes: Additional structured attributes
+        """
+        span = trace.get_current_span()
+        span_context = span.get_span_context()
+
+        extra = {
+            "service": SERVICE_NAME,
+            "event_type": event_type,
+            "trace_id": format(span_context.trace_id, "032x") if span_context.is_valid else None,
+            "span_id": format(span_context.span_id, "016x") if span_context.is_valid else None,
+            "scan_id": self.context.scan_id,
+            "scan_execution_id": self.context.scan_execution_id,
+            "sync_id": self.context.sync_id,
+            "sync_execution_id": self.context.sync_execution_id,
+            "function_type": self.context.function_type,
+            **attributes,
+        }
+
+        extra = {k: v for k, v in extra.items() if v is not None}
+
+        logger.log(level, message, extra=extra)
+
+    def info(self, message: str, **attributes):
+        self.log(logging.INFO, message, **attributes)
+
+    def error(self, message: str, **attributes):
+        self.log(logging.ERROR, message, event_type="error", **attributes)
+
+    def warning(self, message: str, **attributes):
+        self.log(logging.WARNING, message, **attributes)
+
+    def debug(self, message: str, **attributes):
+        self.log(logging.DEBUG, message, **attributes)
+
+
+def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     """Read all secrets from OpenFaaS secret mount path and build a dictionary"""
     secrets_dict: dict[str, str] = {}
     secrets_dir = "/var/openfaas/secrets/"
@@ -236,10 +379,7 @@ def get_secrets(local_run: bool = False) -> dict[str, str]:
                 if len(filename) > 9 and filename[-9:-8] == "-":
                     key_name = filename[:-9]  # Remove last 9 characters (-abcd1234)
                 else:
-                    print(
-                        f"Skipping secret file with unexpected format: {filename}",
-                        flush=True,
-                    )
+                    context.log.info("Skipping secret file with unexpected format", filename=filename)
                     continue
 
             # Convert dash-separated to camelCase
@@ -255,12 +395,20 @@ def get_secrets(local_run: bool = False) -> dict[str, str]:
                 with open(secret_path) as f:
                     content = f.read().strip()
                     secrets_dict[camel_key] = content
-                    print(f"Loaded secret: {camel_key}", flush=True)
+                    context.log.info(
+                        "Loaded secret",
+                        secret_name=camel_key,
+                    )
             except Exception as e:
-                print(f"Error reading secret file {filename}: {str(e)}", flush=True)
+                context.log.error(
+                    "Error reading secret file",
+                    filename=filename,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
 
     except Exception as e:
-        print(f"Error reading secrets directory: {str(e)}", flush=True)
+        context.log.error("Error reading secrets directory", error=str(e), error_type=type(e).__name__)
 
     return secrets_dict
 
@@ -310,53 +458,95 @@ def format_response(resp):
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path: str):
-    event = Event()
-    context = Context()
+    with tracer.start_as_current_span("process_request") as span:
+        event = Event()
+        context = Context()
 
-    local_run = context.run_local == "true"
+        context.log.info(
+            "Received request",
+            http_method=event.method,
+            http_path=event.path,
+            http_query=dict(event.query),
+        )
 
-    # Load secrets from OpenFaaS secret files
-    context.secrets = get_secrets(local_run)
+        try:
+            local_run = context.run_local == "true"
 
-    request_data = json.loads(event.body)
-    context.scan_execution_id = request_data.get("scanExecutionId")
-    context.sync_execution_id = request_data.get("syncExecutionId")
+            # Load secrets from OpenFaaS secret files
+            context.secrets = get_secrets(context, local_run)
 
-    if not context.secrets:
-        print("Warning: No secrets loaded from secret files", flush=True)
-    else:
-        print(f"Loaded {len(context.secrets)} secrets from secret files", flush=True)
+            request_data = json.loads(event.body)
+            context.scan_execution_id = request_data.get("scanExecutionId")
+            context.sync_execution_id = request_data.get("syncExecutionId")
 
-    started_at = datetime.now(UTC).isoformat()
+            if not context.secrets:
+                context.log.warning("No secrets loaded from secret files")
+            else:
+                context.log.info(
+                    "Loaded secrets from secret files",
+                    secret_count=len(context.secrets),
+                )
 
-    if context.function_type == "access-scan" or context.function_type == "sync":
-        context.update_execution(status="running")
+            started_at = datetime.now(UTC).isoformat()
 
-    response_data = handler.handle(event, context)
-    completed_at = datetime.now(UTC).isoformat()
+            if context.function_type == "access-scan" or context.function_type == "sync":
+                context.update_execution(status="running")
+                context.log.info("Started operation", function_type=context.function_type)
 
-    if context.function_type == "test-connection" and response_data["statusCode"] == 200:
-        response_data["body"]["startedAt"] = started_at
-        response_data["body"]["completedAt"] = completed_at
-    elif context.function_type == "access-scan" or context.function_type == "sync":
-        if response_data["statusCode"] == 200:
-            response_data["body"]["startedAt"] = started_at
-            response_data["body"]["completedAt"] = completed_at
-            context.update_execution(status="completed", completed_at=completed_at)
-        else:
-            context.update_execution(status="failed", completed_at=completed_at)
+            with tracer.start_as_current_span("handle_request"):
+                response_data = handler.handle(event, context)
 
-    return format_response(response_data)
+            completed_at = datetime.now(UTC).isoformat()
+            if context.function_type == "test-connection" and response_data["statusCode"] == 200:
+                response_data["body"]["startedAt"] = started_at
+                response_data["body"]["completedAt"] = completed_at
+            elif context.function_type == "access-scan" or context.function_type == "sync":
+                if response_data["statusCode"] == 200:
+                    response_data["body"]["startedAt"] = started_at
+                    response_data["body"]["completedAt"] = completed_at
+                    context.update_execution(status="completed", completed_at=completed_at)
+                    context.log.info(
+                        f"Completed {context.function_type} operation successfully",
+                        function_type=context.function_type,
+                        status="completed",
+                    )
+                else:
+                    context.update_execution(status="failed", completed_at=completed_at)
+                    context.log.error(
+                        f"Failed {context.function_type} operation",
+                        function_type=context.function_type,
+                        status="failed",
+                        status_code=response_data["statusCode"],
+                    )
+
+            with tracer.start_as_current_span("format_response"):
+                resp = format_response(response_data)
+
+            status_code = response_data.get("statusCode", 200)
+            span.set_attribute("http.status_code", status_code)
+            span.set_status(StatusCode.OK)
+            context.log.info("Request completed", http_status_code=status_code)
+
+            return resp
+        except Exception as e:
+            span.set_attribute("http.status_code", 500)
+            span.record_exception(e)
+            span.set_status(StatusCode.ERROR)
+            context.log.error(
+                "Request failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
 
 
 if __name__ == "__main__":
     if os.getenv("DEBUG_MODE", "false").lower() == "true":
         try:
-            import debugpy
+            import debugpy  # noqa: T100
 
-            debugpy.listen((os.getenv("DEBUG_HOST", "0.0.0.0"), int(os.getenv("DEBUG_PORT", 5678))))
-            print("Debugger listening on {}:{}".format(os.getenv("DEBUG_HOST", "0.0.0.0"), os.getenv("DEBUG_PORT", 5678)))
-            debugpy.wait_for_client()
+            debugpy.listen((os.getenv("DEBUG_HOST", "0.0.0.0"), int(os.getenv("DEBUG_PORT", 5678))))  # noqa: T100
+            debugpy.wait_for_client()  # noqa: T100
         except ImportError:
             app.logger.error("debugpy module not found, continuing without debugger")
         except Exception as e:

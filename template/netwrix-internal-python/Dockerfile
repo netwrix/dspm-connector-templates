@@ -7,6 +7,7 @@ RUN chmod +x /usr/bin/fwatchdog
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
 ARG DEBUG_MODE="false"
+ARG SERVICE_NAME
 
 RUN --mount=type=cache,target=/var/cache/apk \
     if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk upgrade; fi && \
@@ -69,6 +70,7 @@ ENV fprocess="python index.py"
 ENV cgi_headers="true"
 ENV mode="http"
 ENV upstream_url="http://127.0.0.1:5000"
+ENV SERVICE_NAME="${SERVICE_NAME}"
 
 HEALTHCHECK --interval=5s CMD [ -e /tmp/.lock ] || exit 1
 
