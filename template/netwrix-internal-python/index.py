@@ -59,7 +59,9 @@ def setup_opentelemetry(app: object | None = None) -> None:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     try:
-        otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4318")
+        otel_endpoint = os.getenv(
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector.access-analyzer.svc.cluster.local:4318"
+        )
 
         resource = Resource.create(
             {
