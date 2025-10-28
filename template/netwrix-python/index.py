@@ -228,7 +228,7 @@ class Context:
                     timeout=30,
                 )
 
-            if response.status_code == 202 or (local_run and response.status_code == 200):
+            if response.status_code in (202, 200):
                 if update_status:
                     self.update_execution(
                         status="running",
@@ -298,7 +298,7 @@ class Context:
                     timeout=30,
                 )
 
-            if response.status_code == 202 or (local_run and response.status_code == 200):
+            if response.status_code in (202, 200):
                 return True, None
             error_msg = f"Status {response.status_code}: {response.text}"
             self.log.error(error_msg)
