@@ -33,9 +33,9 @@ ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
 
 # Template specific steps
 WORKDIR /home/app/
-COPY --chown=app:app ./template/netwrix-python/index.py           .
-COPY --chown=app:app ./template/netwrix-python/pyproject.toml     .
-COPY --chown=app:app ./template/netwrix-python/uv.lock            .
+COPY --chown=app:app ./template/netwrix-internal-python/index.py           .
+COPY --chown=app:app ./template/netwrix-internal-python/pyproject.toml     .
+COPY --chown=app:app ./template/netwrix-internal-python/uv.lock            .
 USER root
 RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
