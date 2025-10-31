@@ -9,7 +9,6 @@ from opentelemetry import metrics, trace
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
-
 dictConfig(
     {
         "version": 1,
@@ -180,7 +179,7 @@ class ContextLogger:
 
         extra = {k: v for k, v in extra.items() if v is not None}
 
-        self._logger.log(level, message, extra=extra)
+        self._logger.log(level, message, stacklevel=3, extra=extra)
 
     def info(self, message: str, **attributes):
         self.log(logging.INFO, message, **attributes)
