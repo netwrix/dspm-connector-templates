@@ -344,7 +344,7 @@ class ContextLogger:
 
         extra = {k: v for k, v in extra.items() if v is not None}
 
-        logger.log(level, message, extra=extra)
+        logger.log(level, message, stacklevel=3, extra=extra)
 
     def info(self, message: str, **attributes):
         self.log(logging.INFO, message, **attributes)
