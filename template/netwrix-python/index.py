@@ -71,7 +71,7 @@ def setup_opentelemetry(app: object | None = None) -> None:
         resource = Resource.create(
             {
                 "service.name": SERVICE_NAME,
-                "service.namespace": "dspm-functions",
+                "service.namespace": "dspm-connectors",
                 "deployment.environment": os.getenv("ENVIRONMENT", "development"),
             }
         )
@@ -122,8 +122,8 @@ def get_logger(name: str):
 
 
 setup_opentelemetry(app)
-tracer = trace.get_tracer(__name__)
-logger = get_logger(__name__)
+tracer = get_tracer(SERVICE_NAME)
+logger = get_logger(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
@@ -312,6 +312,8 @@ class Context:
 class ContextLogger:
     def __init__(self, context: Context):
         self.context = context
+        self.service_name = SERVICE_NAME
+        self._logger = get_logger(self.service_name)
 
     def __call__(self, level: int, message: str, event_type: str = "operation", **attributes):
         self.log(level, message, event_type, **attributes)
@@ -330,7 +332,7 @@ class ContextLogger:
         span_context = span.get_span_context()
 
         extra = {
-            "service": SERVICE_NAME,
+            "service": self.service_name,
             "event_type": event_type,
             "trace_id": format(span_context.trace_id, "032x") if span_context.is_valid else None,
             "span_id": format(span_context.span_id, "016x") if span_context.is_valid else None,
