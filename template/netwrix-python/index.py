@@ -34,7 +34,7 @@ dictConfig(
 
 SOURCE_TYPE: Final = os.getenv("SOURCE_TYPE", "internal")
 FUNCTION_TYPE: Final = os.getenv("FUNCTION_TYPE", "netwrix")
-SERVICE_NAME: Final = os.getenv("SERVICE_NAME", f"{SOURCE_TYPE}-{FUNCTION_TYPE}")
+SERVICE_NAME: Final = f"{SOURCE_TYPE}-{FUNCTION_TYPE}"
 app = Flask(SERVICE_NAME)
 
 
@@ -231,7 +231,6 @@ class Context:
             if response.status_code in (202, 200):
                 if update_status:
                     self.update_execution(
-                        status="running",
                         increment_completed_objects=len(enhanced_data),
                     )
                 return True, None
@@ -292,7 +291,7 @@ class Context:
                 )
             else:
                 response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
                     json=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
