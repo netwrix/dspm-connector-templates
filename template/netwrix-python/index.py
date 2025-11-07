@@ -365,54 +365,23 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     secrets_dict: dict[str, str] = {}
     secrets_dir = "/var/openfaas/secrets/"
 
-    try:
-        # List all files in the secrets directory
-        for filename in os.listdir(secrets_dir):
-            secret_path = os.path.join(secrets_dir, filename)
-
-            # Skip directories and non-files
-            if not os.path.isfile(secret_path):
-                continue
-
-            # Extract the key name based on local_run parameter
-            if local_run:
-                # For local run, use the filename as-is (no scan ID removal)
-                key_name = filename
-            else:
-                # For non-local run, remove the last 9 characters (dash + 8 chars scan ID)
-                if len(filename) > 9 and filename[-9:-8] == "-":
-                    key_name = filename[:-9]  # Remove last 9 characters (-abcd1234)
-                else:
-                    context.log.info("Skipping secret file with unexpected format", filename=filename)
-                    continue
-
-            # Convert dash-separated to camelCase
-            key_parts = key_name.split("-")
-            if len(key_parts) > 1:
-                # First part stays lowercase, subsequent parts are capitalized
-                camel_key = key_parts[0] + "".join(word.capitalize() for word in key_parts[1:])
-            else:
-                camel_key = key_parts[0]
-
-            # Read the secret content
-            try:
-                with open(secret_path) as f:
-                    content = f.read().strip()
-                    secrets_dict[camel_key] = content
-                    context.log.info(
-                        "Loaded secret",
-                        secret_name=camel_key,
-                    )
-            except Exception as e:
-                context.log.error(
-                    "Error reading secret file",
-                    filename=filename,
-                    error=str(e),
-                    error_type=type(e).__name__,
+    secret_mappings = os.getenv("SECRET_MAPPINGS", "").split(",")
+    secret_mappings_dict = {mapping.split(":")[0]: mapping.split(":")[1] for mapping in secret_mappings}
+    for key, path in secret_mappings_dict.items():
+        try:
+            with open(os.path.join(secrets_dir, path)) as f:
+                secrets_dict[key] = f.read().strip()
+                context.log.info(
+                    "Loaded secret",
+                    secret_name=key,
                 )
-
-    except Exception as e:
-        context.log.error("Error reading secrets directory", error=str(e), error_type=type(e).__name__)
+        except Exception as e:
+            context.log.error(
+                "Error reading secret file",
+                filename=path,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
 
     return secrets_dict
 
