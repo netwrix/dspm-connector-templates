@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import logging
 import os
+import signal
+from collections.abc import Callable
 from logging.config import dictConfig
 from typing import Final
 
@@ -32,16 +34,20 @@ SERVICE_NAME: Final = os.getenv("SERVICE_NAME", __name__)
 app = Flask(SERVICE_NAME)
 
 
-def setup_opentelemetry(app: object | None = None) -> None:
+def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
     """
     Initialize OpenTelemetry instrumentation for traces, metrics, and logs.
 
     Returns:
         bool: True if setup succeeded, False otherwise
     """
+
+    def noop() -> None:
+        return
+
     if os.getenv("OTEL_ENABLED", "true").lower() != "true":
         logging.info("OpenTelemetry disabled via OTEL_ENABLED environment variable")
-        return
+        return noop
 
     from opentelemetry._logs import set_logger_provider
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -96,8 +102,16 @@ def setup_opentelemetry(app: object | None = None) -> None:
 
         logging.info("OpenTelemetry initialized")
 
+        def flush_opentelemetry():
+            trace_provider.force_flush()
+            metric_provider.force_flush()
+            logger_provider.force_flush()
+
+        return flush_opentelemetry
+
     except Exception:
         logging.exception("Failed to initialize OpenTelemetry")
+        return noop
 
 
 def get_tracer(name: str):
@@ -115,7 +129,7 @@ def get_logger(name: str):
     return logging.getLogger(name)
 
 
-setup_opentelemetry(app)
+flush_opentelemetry = setup_opentelemetry(app)
 logger = get_logger(SERVICE_NAME)
 tracer = get_tracer(SERVICE_NAME)
 
@@ -274,6 +288,13 @@ def call_handler(path):
             )
             raise
 
+
+def handle_shutdown(signum, frame):
+    flush_opentelemetry()
+
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 if __name__ == "__main__":
     if os.getenv("DEBUG_MODE", "false").lower() == "true":
