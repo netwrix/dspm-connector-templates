@@ -82,18 +82,18 @@ RUN test "$USE_POWERSHELL" = "true" && { \
       && rm /tmp/powershell.tar.gz; \
     } || true
 
-# Copy files from powershellfiles folder if it exists
-COPY --chown=root:root powershellfiles* /tmp/copyfiles/
+# Copy files from powershell-deps directory if it exists
+COPY --chown=root:root powershell-deps* /tmp/deps/
 RUN test "$USE_POWERSHELL" = "true" && { \
       case "$TARGETPLATFORM" in \
         linux/amd64) ARCH_DIR="amd64" ;; \
         linux/arm64) ARCH_DIR="arm64" ;; \
         *) ARCH_DIR="" ;; \
       esac; \
-      if [ -n "$ARCH_DIR" ] && [ -d "/tmp/copyfiles/$ARCH_DIR" ] && [ "$(ls -A /tmp/copyfiles/$ARCH_DIR 2>/dev/null)" ]; then \
-        cp -r /tmp/copyfiles/$ARCH_DIR/*.so /opt/microsoft/powershell/7/; \
+      if [ -n "$ARCH_DIR" ] && [ -d "/tmp/deps/$ARCH_DIR" ] && [ "$(ls -A /tmp/deps/$ARCH_DIR 2>/dev/null)" ]; then \
+        cp -r /tmp/deps/$ARCH_DIR/*.so /opt/microsoft/powershell/7/; \
       fi; \
-      rm -rf /tmp/copyfiles; \
+      rm -rf /tmp/deps; \
     } || true
 
 FROM build AS ship
