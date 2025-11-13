@@ -5,7 +5,7 @@ COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
 
 ARG UPGRADE_PACKAGES
-ARG ADDITIONAL_PACKAGE
+ARG ADDITIONAL_PACKAGE="ca-certificates libicu72 libssl3 curl gss-ntlmssp libsasl2-modules-gssapi-mit"
 ARG DEBUG_MODE="false"
 ARG FUNCTION_DIR
 
@@ -65,36 +65,31 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
 COPY --chown=app:app ${FUNCTION_DIR}/ .
 
 # PowerShell
-ARG USE_POWERSHELL="false"
 ARG USE_POWERSHELL_VERSION=7.4.13
 ARG TARGETPLATFORM
-RUN test "$USE_POWERSHELL" = "true" && { \
-      case "$TARGETPLATFORM" in \
-        linux/amd64) PS_PACKAGE="powershell-${USE_POWERSHELL_VERSION}-linux-x64.tar.gz" ;; \
-        linux/arm64) PS_PACKAGE="powershell-${USE_POWERSHELL_VERSION}-linux-arm64.tar.gz" ;; \
-        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
-      esac \
-      && curl -L "https://github.com/PowerShell/PowerShell/releases/download/v${USE_POWERSHELL_VERSION}/${PS_PACKAGE}" -o /tmp/powershell.tar.gz \
-      && mkdir -p /opt/microsoft/powershell/7 \
-      && tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7 \
-      && chmod +x /opt/microsoft/powershell/7/pwsh \
-      && ln -s /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh \
-      && rm /tmp/powershell.tar.gz; \
-    } || true
+RUN case "$TARGETPLATFORM" in \
+      linux/amd64) PS_PACKAGE="powershell-${USE_POWERSHELL_VERSION}-linux-x64.tar.gz" ;; \
+      linux/arm64) PS_PACKAGE="powershell-${USE_POWERSHELL_VERSION}-linux-arm64.tar.gz" ;; \
+      *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
+    esac \
+    && curl -L "https://github.com/PowerShell/PowerShell/releases/download/v${USE_POWERSHELL_VERSION}/${PS_PACKAGE}" -o /tmp/powershell.tar.gz \
+    && mkdir -p /opt/microsoft/powershell/7 \
+    && tar zxf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7 \
+    && chmod +x /opt/microsoft/powershell/7/pwsh \
+    && ln -s /opt/microsoft/powershell/7/pwsh /usr/bin/pwsh \
+    && rm /tmp/powershell.tar.gz
 
 # Copy files from powershell-deps directory if it exists
-COPY --chown=root:root powershell-deps* /tmp/deps/
-RUN test "$USE_POWERSHELL" = "true" && { \
-      case "$TARGETPLATFORM" in \
-        linux/amd64) ARCH_DIR="amd64" ;; \
-        linux/arm64) ARCH_DIR="arm64" ;; \
-        *) ARCH_DIR="" ;; \
-      esac; \
-      if [ -n "$ARCH_DIR" ] && [ -d "/tmp/deps/$ARCH_DIR" ] && [ "$(ls -A /tmp/deps/$ARCH_DIR 2>/dev/null)" ]; then \
-        cp -r /tmp/deps/$ARCH_DIR/*.so /opt/microsoft/powershell/7/; \
-      fi; \
-      rm -rf /tmp/deps; \
-    } || true
+COPY --chown=root:root powershell-deps /tmp/deps/
+RUN case "$TARGETPLATFORM" in \
+      linux/amd64) ARCH_DIR="amd64" ;; \
+      linux/arm64) ARCH_DIR="arm64" ;; \
+      *) ARCH_DIR="" ;; \
+    esac; \
+    if [ -n "$ARCH_DIR" ] && [ -d "/tmp/deps/$ARCH_DIR" ] && [ "$(ls -A /tmp/deps/$ARCH_DIR 2>/dev/null)" ]; then \
+      cp -r /tmp/deps/$ARCH_DIR/*.so /opt/microsoft/powershell/7/; \
+    fi; \
+    rm -rf /tmp/deps
 
 FROM build AS ship
 WORKDIR /home/app/
