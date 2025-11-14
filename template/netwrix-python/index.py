@@ -164,12 +164,13 @@ def get_bytes(obj, seen=None):
         size += sum(get_bytes(i, seen) for i in obj)
     return size
 
+
 # BatchManager is used to manage the batching of objects for a specific table. It will
 # automatically flush the batch when the size of the batch exceeds 1MB.
 # It will also update the execution status when the batch is flushed.
 # This class is thread-safe and can be used by multiple threads to add objects to the batch.
 class BatchManager:
-    def __init__(self, context: Context, table_name: str)-> None:
+    def __init__(self, context: Context, table_name: str) -> None:
         self.context = context
         self.table_name = table_name
         self.size = 0
@@ -225,7 +226,6 @@ class BatchManager:
                     if update_status:
                         self.increment_completed_objects += 1
 
-
     def _flush_internal(self) -> tuple[bool, str | None] | None:
         """Internal flush method - assumes lock is already held"""
         success, error = True, None
@@ -246,14 +246,14 @@ class BatchManager:
                 ## call to local docker container function
                 response = requests.post(
                     f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
-                    data=orjson.dumps(payload),
+                    data=orjson.dumps(payload),  # use orjson to speed up the serialization
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
             else:
                 response = requests.post(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
-                    data=orjson.dumps(payload),
+                    data=orjson.dumps(payload),  # use orjson to speed up the serialization
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
@@ -284,6 +284,7 @@ class BatchManager:
         """Public flush method - acquires lock before flushing"""
         with self.lock:
             return self._flush_internal()
+
 
 class Event:
     def __init__(self):
