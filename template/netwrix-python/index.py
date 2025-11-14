@@ -212,9 +212,10 @@ class BatchManager:
                     }
 
                 size = get_bytes(enhanced_object)
-                # Slightly less than 1MB, which is the max for an HTTP request and to
-                # accomodate for the overhead of the additional fields in the request.
-                if size + self.size > 1000000:
+                # Set the max size to slightly less than 2MB to accommodate for the 
+                # overhead of the additional fields in the request. This is a good 
+                # compromise between performance and memory usage.
+                if size + self.size > 2097152:
                     self._flush_internal()
                     self.rows.append(enhanced_object)
                     self.size = size
