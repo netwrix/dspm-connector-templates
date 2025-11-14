@@ -5,15 +5,13 @@ import base64
 import json
 import logging
 import os
-import sys
 import signal
+import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.config import dictConfig
 from typing import Final
-from itertools import chain
-from collections.abc import Mapping, Container
 
 import orjson
 import requests
@@ -149,6 +147,7 @@ logger = get_logger(SERVICE_NAME)
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
 
+
 def get_bytes(obj, seen=None):
     """Recursively finds size of objects including referenced objects."""
     size = sys.getsizeof(obj)
@@ -274,11 +273,12 @@ class BatchManager:
             self.context.log.error(error_msg, error_type=type(e).__name__)
             success = False
             error = error_msg
-        finally:
-            self.size = 0
-            self.increment_completed_objects = 0
-            self.rows.clear()
-            return success, error
+
+        self.size = 0
+        self.increment_completed_objects = 0
+        self.rows.clear()
+
+        return success, error
 
     def flush(self) -> tuple[bool, str | None] | None:
         """Public flush method - acquires lock before flushing"""
@@ -322,12 +322,12 @@ class Context:
         status_code = 400 if client_error else 500
 
         return {"statusCode": status_code, "body": {"error": error_msg}}
-    
+
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
         if table not in self.tables:
             self.tables[table] = BatchManager(self, table)
-        
+
         self.tables[table].add_object(obj, update_status)
 
     def save_data(self, table, data, update_status=True):
