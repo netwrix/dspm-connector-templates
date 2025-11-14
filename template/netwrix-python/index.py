@@ -1,14 +1,21 @@
 #!/usr/bin/env python
+from __future__ import annotations
+
 import base64
 import json
 import logging
 import os
+import sys
 import signal
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.config import dictConfig
 from typing import Final
+from itertools import chain
+from collections.abc import Mapping, Container
 
+import orjson
 import requests
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
@@ -142,6 +149,141 @@ logger = get_logger(SERVICE_NAME)
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
 
+def get_bytes(obj, seen=None):
+    """Recursively finds size of objects including referenced objects."""
+    size = sys.getsizeof(obj)
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    seen.add(obj_id)
+
+    if isinstance(obj, dict):
+        size += sum((get_bytes(k, seen) + get_bytes(v, seen)) for k, v in obj.items())
+    elif isinstance(obj, (list, tuple, set, frozenset)):
+        size += sum(get_bytes(i, seen) for i in obj)
+    return size
+
+# BatchManager is used to manage the batching of objects for a specific table. It will
+# automatically flush the batch when the size of the batch exceeds 1MB.
+# It will also update the execution status when the batch is flushed.
+# This class is thread-safe and can be used by multiple threads to add objects to the batch.
+class BatchManager:
+    def __init__(self, context: Context, table_name: str)-> None:
+        self.context = context
+        self.table_name = table_name
+        self.size = 0
+        self.rows = []
+        self.increment_completed_objects = 0
+        self.lock = threading.Lock()
+
+    def add_object(self, obj: object, update_status: bool = True) -> None:
+        if obj is not None:
+            with self.lock:
+                # Add appropriate IDs and timestamp based on operation type (scan vs sync)
+                enhanced_object = {}
+                current_time = datetime.now(UTC).isoformat()
+
+                # Check if this is a sync operation
+                is_sync_operation = self.context.function_type == "sync"
+
+                if is_sync_operation:
+                    # For sync operations - use ClickHouse DateTime format
+                    sync_id = self.context.sync_id
+                    sync_execution_id = self.context.sync_execution_id
+                    synced_at = current_time
+                    enhanced_object = {
+                        "sync_id": sync_id,
+                        "sync_execution_id": sync_execution_id,
+                        "synced_at": synced_at,
+                        **obj,  # Spread the original row data
+                    }
+                else:
+                    # For scan operations
+                    scan_id = self.context.scan_id
+                    scan_execution_id = self.context.scan_execution_id
+                    scanned_at = current_time
+                    enhanced_object = {
+                        "scan_id": scan_id,
+                        "scan_execution_id": scan_execution_id,
+                        "scanned_at": scanned_at,
+                        **obj,  # Spread the original row data
+                    }
+
+                size = get_bytes(enhanced_object)
+                # Slightly less than 1MB, which is the max for an HTTP request and to
+                # accomodate for the overhead of the additional fields in the request.
+                if size + self.size > 1000000:
+                    self._flush_internal()
+                    self.rows.append(enhanced_object)
+                    self.size = size
+                    if update_status:
+                        self.increment_completed_objects += 1
+                else:
+                    self.rows.append(enhanced_object)
+                    self.size += size
+                    if update_status:
+                        self.increment_completed_objects += 1
+
+
+    def _flush_internal(self) -> tuple[bool, str | None] | None:
+        """Internal flush method - assumes lock is already held"""
+        success, error = True, None
+        local_run = self.context.run_local == "true"
+
+        if len(self.rows) == 0:
+            return success, error
+
+        try:
+            payload = {
+                "sourceType": os.getenv("SOURCE_TYPE"),
+                "version": os.getenv("SOURCE_VERSION"),
+                "table": self.table_name,
+                "data": self.rows,
+            }
+
+            if local_run:
+                ## call to local docker container function
+                response = requests.post(
+                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
+                    data=orjson.dumps(payload),
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+            else:
+                response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
+                    data=orjson.dumps(payload),
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+
+            if response.status_code in (202, 200):
+                if self.increment_completed_objects > 0:
+                    self.context.update_execution(
+                        increment_completed_objects=self.increment_completed_objects,
+                    )
+            else:
+                error_msg = f"Status {response.status_code}: {response.text}"
+                self.context.log.error(error_msg)
+                success = False
+                error = error_msg
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            self.context.log.error(error_msg, error_type=type(e).__name__)
+            success = False
+            error = error_msg
+        finally:
+            self.size = 0
+            self.increment_completed_objects = 0
+            self.rows.clear()
+            return success, error
+
+    def flush(self) -> tuple[bool, str | None] | None:
+        """Public flush method - acquires lock before flushing"""
+        with self.lock:
+            return self._flush_internal()
 
 class Event:
     def __init__(self):
@@ -161,6 +303,7 @@ class Context:
         self.sync_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
+        self.tables: dict[str, BatchManager] = {}
 
         self.log = ContextLogger(self)
 
@@ -179,6 +322,13 @@ class Context:
         status_code = 400 if client_error else 500
 
         return {"statusCode": status_code, "body": {"error": error_msg}}
+    
+    # Add an object to the appropriate table batch manager
+    def save_object(self, table: str, obj: object, update_status: bool = True):
+        if table not in self.tables:
+            self.tables[table] = BatchManager(self, table)
+        
+        self.tables[table].add_object(obj, update_status)
 
     def save_data(self, table, data, update_status=True):
         # Add appropriate IDs and timestamp based on operation type (scan vs sync)
@@ -482,6 +632,10 @@ def call_handler(path: str):
 
             with tracer.start_as_current_span("handle_request"):
                 response_data = handler.handle(event, context)
+
+            # Flush remaining rows in all tables
+            for table in context.tables:
+                context.tables[table].flush()
 
             completed_at = datetime.now(UTC).isoformat()
             if context.function_type == "test-connection" and response_data["statusCode"] == 200:
