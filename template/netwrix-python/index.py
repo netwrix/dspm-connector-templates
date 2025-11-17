@@ -156,7 +156,7 @@ class BatchManager:
         self.context = context
         self.table_name = table_name
         self.size = 0
-        self.rows = b"[" # bytes instead of array for efficient size checks
+        self.rows = b"["  # bytes instead of array for efficient size checks
         self.increment_completed_objects = 0
         self.lock = threading.Lock()
 
@@ -165,7 +165,7 @@ class BatchManager:
             with self.lock:
                 # Add appropriate IDs and timestamp based on operation type (scan vs sync)
                 current_time = datetime.now(UTC).isoformat()
-                object_data = orjson.dumps(obj)[1:] # Remove the first brace
+                object_data = orjson.dumps(obj)[1:]  # Remove the first brace
 
                 # Check if this is a sync operation
                 is_sync_operation = self.context.function_type == "sync"
@@ -173,20 +173,32 @@ class BatchManager:
                 if is_sync_operation:
                     # For sync operations - use ClickHouse DateTime format
                     enhanced_object = (
-                        b"{" +
-                        b"\"sync_id\":\"" + self.context.sync_id.encode("utf-8") + b"\"," +
-                        b"\"sync_execution_id\":\"" + self.context.sync_execution_id.encode("utf-8") + b"\"," +
-                        b"\"synced_at\":\"" + current_time.encode("utf-8") + b"\"," +
-                        object_data # The last brace is already included in the object_data
+                        b"{"
+                        + b'"sync_id":"'
+                        + self.context.sync_id.encode("utf-8")
+                        + b'",'
+                        + b'"sync_execution_id":"'
+                        + self.context.sync_execution_id.encode("utf-8")
+                        + b'",'
+                        + b'"synced_at":"'
+                        + current_time.encode("utf-8")
+                        + b'",'
+                        + object_data  # The last brace is already included in the object_data
                     )
                 else:
                     # For scan operations
                     enhanced_object = (
-                        b"{" +
-                        b"\"scan_id\":\"" + self.context.scan_id.encode("utf-8") + b"\"," +
-                        b"\"scan_execution_id\":\"" + self.context.scan_execution_id.encode("utf-8") + b"\"," +
-                        b"\"scanned_at\":\"" + current_time.encode("utf-8") + b"\"," +
-                        object_data # The last brace is already included in the object_data
+                        b"{"
+                        + b'"scan_id":"'
+                        + self.context.scan_id.encode("utf-8")
+                        + b'",'
+                        + b'"scan_execution_id":"'
+                        + self.context.scan_execution_id.encode("utf-8")
+                        + b'",'
+                        + b'"scanned_at":"'
+                        + current_time.encode("utf-8")
+                        + b'",'
+                        + object_data  # The last brace is already included in the object_data
                     )
                 size = len(enhanced_object)
 
@@ -211,14 +223,21 @@ class BatchManager:
             return success, error
 
         try:
-            self.rows = self.rows[:-1] + b"]" # Remove the last comma and add a closing bracket
+            self.rows = self.rows[:-1] + b"]"  # Remove the last comma and add a closing bracket
             payload = (
-                b"{" +
-                b"\"sourceType\":\"" + os.getenv("SOURCE_TYPE", "").encode("utf-8") + b"\"," +
-                b"\"version\":\"" + os.getenv("SOURCE_VERSION", "").encode("utf-8") + b"\"," +
-                b"\"table\":\"" + self.table_name.encode("utf-8") + b"\"," +
-                b"\"data\":" + self.rows +
-                b"}"
+                b"{"
+                + b'"sourceType":"'
+                + os.getenv("SOURCE_TYPE", "").encode("utf-8")
+                + b'",'
+                + b'"version":"'
+                + os.getenv("SOURCE_VERSION", "").encode("utf-8")
+                + b'",'
+                + b'"table":"'
+                + self.table_name.encode("utf-8")
+                + b'",'
+                + b'"data":'
+                + self.rows
+                + b"}"
             )
 
             if local_run:
@@ -255,7 +274,7 @@ class BatchManager:
 
         self.size = 0
         self.increment_completed_objects = 0
-        self.rows = b"[" # Reset the rows to a new array
+        self.rows = b"["  # Reset the rows to a new array
 
         return success, error
 
