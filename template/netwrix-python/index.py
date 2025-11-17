@@ -147,24 +147,6 @@ logger = get_logger(SERVICE_NAME)
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
 
-
-def get_bytes(obj, seen=None):
-    """Recursively finds size of objects including referenced objects."""
-    size = sys.getsizeof(obj)
-    if seen is None:
-        seen = set()
-    obj_id = id(obj)
-    if obj_id in seen:
-        return 0
-    seen.add(obj_id)
-
-    if isinstance(obj, dict):
-        size += sum((get_bytes(k, seen) + get_bytes(v, seen)) for k, v in obj.items())
-    elif isinstance(obj, (list, tuple, set, frozenset)):
-        size += sum(get_bytes(i, seen) for i in obj)
-    return size
-
-
 # BatchManager is used to manage the batching of objects for a specific table. It will
 # automatically flush the batch when the size of the batch exceeds 1MB.
 # It will also update the execution status when the batch is flushed.
