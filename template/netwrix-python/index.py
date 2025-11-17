@@ -208,18 +208,18 @@ class BatchManager:
                     )
                 size = len(enhanced_object)
 
-                # Set the max size to 500 KB to accommodate for the 
-                # overhead of the additional fields in the request. This is a good 
+                # Set the max size to 500 KB to accommodate for the
+                # overhead of the additional fields in the request. This is a good
                 # compromise between performance and memory usage and keeps us
                 # below the NATS payload limit.
                 if size + self.size > 500000:
                     self._flush_internal()
-                   
+
                 self.rows += enhanced_object + b","
                 self.size += size
                 if update_status:
                     self.increment_completed_objects += 1
-                
+
     def _flush_internal(self) -> tuple[bool, str | None] | None:
         """Internal flush method - assumes lock is already held"""
         success, error = True, None
