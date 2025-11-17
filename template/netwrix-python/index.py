@@ -174,7 +174,7 @@ class BatchManager:
         self.context = context
         self.table_name = table_name
         self.size = 0
-        self.rows = []
+        self.rows = b"[" # bytes instead of array for efficient size checks
         self.increment_completed_objects = 0
         self.lock = threading.Lock()
 
@@ -182,79 +182,75 @@ class BatchManager:
         if obj is not None:
             with self.lock:
                 # Add appropriate IDs and timestamp based on operation type (scan vs sync)
-                enhanced_object = {}
                 current_time = datetime.now(UTC).isoformat()
+                object_data = orjson.dumps(obj)[1:] # Remove the first brace
 
                 # Check if this is a sync operation
                 is_sync_operation = self.context.function_type == "sync"
 
                 if is_sync_operation:
                     # For sync operations - use ClickHouse DateTime format
-                    sync_id = self.context.sync_id
-                    sync_execution_id = self.context.sync_execution_id
-                    synced_at = current_time
-                    enhanced_object = {
-                        "sync_id": sync_id,
-                        "sync_execution_id": sync_execution_id,
-                        "synced_at": synced_at,
-                        **obj,  # Spread the original row data
-                    }
+                    enhanced_object = (
+                        b"{" +
+                        b"\"sync_id\":\"" + self.context.sync_id.encode("utf-8") + b"\"," +
+                        b"\"sync_execution_id\":\"" + self.context.sync_execution_id.encode("utf-8") + b"\"," +
+                        b"\"synced_at\":\"" + current_time.encode("utf-8") + b"\"," +
+                        object_data # The last brace is already included in the object_data
+                    )
                 else:
                     # For scan operations
-                    scan_id = self.context.scan_id
-                    scan_execution_id = self.context.scan_execution_id
-                    scanned_at = current_time
-                    enhanced_object = {
-                        "scan_id": scan_id,
-                        "scan_execution_id": scan_execution_id,
-                        "scanned_at": scanned_at,
-                        **obj,  # Spread the original row data
-                    }
+                    enhanced_object = (
+                        b"{" +
+                        b"\"scan_id\":\"" + self.context.scan_id.encode("utf-8") + b"\"," +
+                        b"\"scan_execution_id\":\"" + self.context.scan_execution_id.encode("utf-8") + b"\"," +
+                        b"\"scanned_at\":\"" + current_time.encode("utf-8") + b"\"," +
+                        object_data # The last brace is already included in the object_data
+                    )
+                size = len(enhanced_object)
 
-                size = get_bytes(enhanced_object)
-                # Set the max size to slightly less than 2MB to accommodate for the 
+                # Set the max size to 500 KB to accommodate for the 
                 # overhead of the additional fields in the request. This is a good 
-                # compromise between performance and memory usage.
-                if size + self.size > 2097152:
+                # compromise between performance and memory usage and keeps us
+                # below the NATS payload limit.
+                if size + self.size > 500000:
                     self._flush_internal()
-                    self.rows.append(enhanced_object)
-                    self.size = size
-                    if update_status:
-                        self.increment_completed_objects += 1
-                else:
-                    self.rows.append(enhanced_object)
-                    self.size += size
-                    if update_status:
-                        self.increment_completed_objects += 1
-
+                   
+                self.rows += enhanced_object + b","
+                self.size += size
+                if update_status:
+                    self.increment_completed_objects += 1
+                
     def _flush_internal(self) -> tuple[bool, str | None] | None:
         """Internal flush method - assumes lock is already held"""
         success, error = True, None
         local_run = self.context.run_local == "true"
 
-        if len(self.rows) == 0:
+        if len(self.rows) == 1:
             return success, error
 
         try:
-            payload = {
-                "sourceType": os.getenv("SOURCE_TYPE"),
-                "version": os.getenv("SOURCE_VERSION"),
-                "table": self.table_name,
-                "data": self.rows,
-            }
+            self.rows = self.rows[:-1] + b"]" # Remove the last comma and add a closing bracket
+            payload = (
+                b"{" +
+                b"\"sourceType\":\"" + os.getenv("SOURCE_TYPE", "").encode("utf-8") + b"\"," +
+                b"\"version\":\"" + os.getenv("SOURCE_VERSION", "").encode("utf-8") + b"\"," +
+                b"\"table\":\"" + self.table_name.encode("utf-8") + b"\"," +
+                b"\"data\":" + self.rows +
+                b"}"
+            )
 
             if local_run:
                 ## call to local docker container function
                 response = requests.post(
                     f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
-                    data=orjson.dumps(payload),  # use orjson to speed up the serialization
+                    data=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
             else:
                 response = requests.post(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
-                    data=orjson.dumps(payload),  # use orjson to speed up the serialization
+                    data=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
@@ -277,7 +273,7 @@ class BatchManager:
 
         self.size = 0
         self.increment_completed_objects = 0
-        self.rows.clear()
+        self.rows = b"[" # Reset the rows to a new array
 
         return success, error
 
@@ -324,6 +320,10 @@ class Context:
         status_code = 400 if client_error else 500
 
         return {"statusCode": status_code, "body": {"error": error_msg}}
+
+    def flush_tables(self):
+        for table in self.tables:
+            self.tables[table].flush()
 
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
@@ -636,8 +636,7 @@ def call_handler(path: str):
                 response_data = handler.handle(event, context)
 
             # Flush remaining rows in all tables
-            for table in context.tables:
-                context.tables[table].flush()
+            context.flush_tables()
 
             completed_at = datetime.now(UTC).isoformat()
             if context.function_type == "test-connection" and response_data["statusCode"] == 200:
