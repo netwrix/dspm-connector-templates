@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import signal
-import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -146,6 +145,7 @@ logger = get_logger(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
+
 
 # BatchManager is used to manage the batching of objects for a specific table. It will
 # automatically flush the batch when the size of the batch exceeds 1MB.
