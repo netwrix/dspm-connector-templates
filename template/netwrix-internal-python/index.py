@@ -148,9 +148,6 @@ class Event:
 
 class Context:
     def __init__(self):
-        self.scan_id = None
-        self.scan_execution_id = None
-        self.sync_id = None
         self.user_id = None
 
         self.log = ContextLogger(self)
@@ -185,8 +182,6 @@ class ContextLogger:
             "event_type": event_type,
             "trace_id": format(span_context.trace_id, "032x") if span_context.is_valid else None,
             "span_id": format(span_context.span_id, "016x") if span_context.is_valid else None,
-            "scan_execution_id": self.context.scan_execution_id,
-            "sync_id": self.context.sync_id,
             "user_id": self.context.user_id,
             **attributes,
         }
