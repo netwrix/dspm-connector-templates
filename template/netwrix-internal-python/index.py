@@ -8,7 +8,6 @@ from typing import Final
 
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
-from opentelemetry.trace.status import StatusCode
 from opentelemetry.propagate import extract
 from waitress import serve
 
@@ -260,7 +259,7 @@ def extract_trace_context():
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
     event = Event()
-    
+
     caller_attributes = {
         "scan_id": event.headers.get("Scan-Id"),
         "scan_execution_id": event.headers.get("Scan-Execution-Id"),
@@ -281,15 +280,10 @@ def call_handler(path):
         resp = format_response(response_data)
 
         status_code = resp[1] if isinstance(resp, tuple) else 200
-        span.set_attribute("http.status_code", status_code)
-        span.set_status(StatusCode.OK)
         context.log.info("Request completed", http_status_code=status_code)
 
         return resp
     except Exception as e:
-        span.set_attribute("http.status_code", 500)
-        span.record_exception(e)
-        span.set_status(StatusCode.ERROR)
         context.log.error(
             "Request failed",
             error_type=type(e).__name__,

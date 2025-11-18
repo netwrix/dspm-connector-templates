@@ -371,7 +371,7 @@ class Context:
                 context.detach(token)
 
         # Create thread with wrapped target
-        return threading.Thread(target=wrapped_target, *args, **kwargs)
+        return threading.Thread(*args, target=wrapped_target, **kwargs)
 
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
