@@ -147,10 +147,10 @@ class Event:
 
 
 class Context:
-    def __init__(self):
+    def __init__(self, caller_attributes: dict):
         self.user_id = None
-
         self.log = ContextLogger(self)
+        self.caller_attributes = caller_attributes
 
 
 class ContextLogger:
@@ -183,6 +183,7 @@ class ContextLogger:
             "trace_id": format(span_context.trace_id, "032x") if span_context.is_valid else None,
             "span_id": format(span_context.span_id, "016x") if span_context.is_valid else None,
             "user_id": self.context.user_id,
+            **self.context.caller_attributes,
             **attributes,
         }
 
@@ -250,7 +251,13 @@ def format_response(resp):
 def call_handler(path):
     with tracer.start_as_current_span("process_request") as span:
         event = Event()
-        context = Context()
+        caller_attributes = {
+            "scan_id": event.headers.get("Scan-Id"),
+            "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+            "sync_id": event.headers.get("Sync-Id"),
+            "sync_execution_id": event.headers.get("Sync-Execution-Id"),
+        }
+        context = Context(caller_attributes)
 
         context.log.info(
             "Received request",
