@@ -248,6 +248,7 @@ def format_response(resp):
 
     return resp
 
+
 @app.before_request
 def extract_trace_context():
     headers = dict(request.headers)
