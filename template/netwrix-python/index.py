@@ -15,7 +15,7 @@ from typing import Final
 import orjson
 import requests
 from flask import Flask, jsonify, request
-from opentelemetry import metrics, trace
+from opentelemetry import context, metrics, trace
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
@@ -325,6 +325,33 @@ class Context:
     def flush_tables(self):
         for table in self.tables:
             self.tables[table].flush()
+
+    def create_thread(self, target, *args, **kwargs):
+        """
+        Create a thread that automatically inherits the current OpenTelemetry context.
+
+        Usage:
+            def my_worker(arg1, arg2):
+                context.log.info("Working with trace context!")
+
+            thread = self.create_thread(target=my_worker, args=(val1, val2), name="Worker-1")
+            thread.start()
+        """
+        # Capture the current context
+        current_context = context.get_current()
+
+        # Wrap the target function to attach context
+        original_target = target
+
+        def wrapped_target(*target_args, **target_kwargs):
+            token = context.attach(current_context)
+            try:
+                return original_target(*target_args, **target_kwargs)
+            finally:
+                context.detach(token)
+
+        # Create thread with wrapped target
+        return threading.Thread(target=wrapped_target, *args, **kwargs)
 
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
