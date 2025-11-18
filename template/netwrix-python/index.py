@@ -240,19 +240,23 @@ class BatchManager:
                 + b"}"
             )
 
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json"}
+            headers.update(self.context.get_caller_headers())
+
             if local_run:
                 ## call to local docker container function
                 response = requests.post(
                     f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
                     data=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.post(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
                     data=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
 
@@ -325,6 +329,22 @@ class Context:
     def flush_tables(self):
         for table in self.tables:
             self.tables[table].flush()
+
+    def get_caller_headers(self) -> dict[str, str]:
+        """
+        Build headers dict with caller context information to pass to common functions.
+        Only includes headers that have non-None values.
+        """
+        headers = {}
+        if self.scan_id:
+            headers["Scan-Id"] = self.scan_id
+        if self.scan_execution_id:
+            headers["Scan-Execution-Id"] = self.scan_execution_id
+        if self.sync_id:
+            headers["Sync-Id"] = self.sync_id
+        if self.sync_execution_id:
+            headers["Sync-Execution-Id"] = self.sync_execution_id
+        return headers
 
     def create_thread(self, target, *args, **kwargs):
         """
@@ -400,18 +420,22 @@ class Context:
             if completed_at is not None:
                 payload["completedAt"] = completed_at
 
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json"}
+            headers.update(self.get_caller_headers())
+
             if local_run:
                 response = requests.post(
                     f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.post(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
 
