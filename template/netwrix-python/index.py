@@ -322,6 +322,7 @@ class Context:
 
     def error_response(self, client_error, error_msg):
         status_code = 400 if client_error else 500
+        self.log.error(error_msg, status_code=status_code)
 
         return {"statusCode": status_code, "body": {"error": error_msg}}
 
