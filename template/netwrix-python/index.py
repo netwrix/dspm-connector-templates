@@ -420,8 +420,7 @@ class Context:
                 payload["completedAt"] = completed_at
 
             # Build headers with caller context information
-            headers = {"Content-Type": "application/json"}
-            headers.update(self.get_caller_headers())
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
             if local_run:
                 response = requests.post(
