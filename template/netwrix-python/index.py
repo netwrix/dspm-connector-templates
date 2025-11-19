@@ -241,8 +241,7 @@ class BatchManager:
             )
 
             # Build headers with caller context information
-            headers = {"Content-Type": "application/json"}
-            headers.update(self.context.get_caller_headers())
+            headers = {"Content-Type": "application/json", **self.context.get_caller_headers()}
 
             if local_run:
                 ## call to local docker container function
