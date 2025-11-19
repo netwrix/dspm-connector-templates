@@ -15,7 +15,7 @@ from typing import Final
 import orjson
 import requests
 from flask import Flask, jsonify, request
-from opentelemetry import metrics, trace
+from opentelemetry import context, metrics, trace
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
@@ -240,19 +240,22 @@ class BatchManager:
                 + b"}"
             )
 
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.context.get_caller_headers()}
+
             if local_run:
                 ## call to local docker container function
                 response = requests.post(
                     f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
                     data=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.post(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
                     data=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
 
@@ -326,88 +329,55 @@ class Context:
         for table in self.tables:
             self.tables[table].flush()
 
+    def get_caller_headers(self) -> dict[str, str]:
+        """
+        Build headers dict with caller context information to pass to common functions.
+        Only includes headers that have non-None values.
+        """
+        headers = {}
+        if self.scan_id:
+            headers["Scan-Id"] = self.scan_id
+        if self.scan_execution_id:
+            headers["Scan-Execution-Id"] = self.scan_execution_id
+        if self.sync_id:
+            headers["Sync-Id"] = self.sync_id
+        if self.sync_execution_id:
+            headers["Sync-Execution-Id"] = self.sync_execution_id
+        return headers
+
+    def create_thread(self, target, *args, **kwargs):
+        """
+        Create a thread that automatically inherits the current OpenTelemetry context.
+
+        Usage:
+            def my_worker(arg1, arg2):
+                context.log.info("Working with trace context!")
+
+            thread = self.create_thread(target=my_worker, args=(val1, val2), name="Worker-1")
+            thread.start()
+        """
+        # Capture the current context
+        current_context = context.get_current()
+
+        # Wrap the target function to attach context
+        original_target = target
+
+        def wrapped_target(*target_args, **target_kwargs):
+            token = context.attach(current_context)
+            try:
+                return original_target(*target_args, **target_kwargs)
+            finally:
+                context.detach(token)
+
+        # Create thread with wrapped target
+        return threading.Thread(*args, target=wrapped_target, **kwargs)
+
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
         if table not in self.tables:
             self.tables[table] = BatchManager(self, table)
 
         self.tables[table].add_object(obj, update_status)
-
-    def save_data(self, table, data, update_status=True):
-        # Add appropriate IDs and timestamp based on operation type (scan vs sync)
-        enhanced_data = []
-        current_time = datetime.now(UTC).isoformat()
-
-        local_run = self.run_local == "true"
-
-        # Check if this is a sync operation
-        is_sync_operation = self.function_type == "sync"
-
-        if is_sync_operation:
-            # For sync operations - use ClickHouse DateTime format
-            sync_id = self.sync_id
-            sync_execution_id = self.sync_execution_id
-            synced_at = current_time
-            for row in data:
-                enhanced_row = {
-                    "sync_id": sync_id,
-                    "sync_execution_id": sync_execution_id,
-                    "synced_at": synced_at,
-                    **row,  # Spread the original row data
-                }
-                enhanced_data.append(enhanced_row)
-        else:
-            # For scan operations
-            scan_id = self.scan_id
-            scan_execution_id = self.scan_execution_id
-            scanned_at = current_time
-
-            for row in data:
-                enhanced_row = {
-                    "scan_id": scan_id,
-                    "scan_execution_id": scan_execution_id,
-                    "scanned_at": scanned_at,
-                    **row,  # Spread the original row data
-                }
-                enhanced_data.append(enhanced_row)
-
-        try:
-            payload = {
-                "sourceType": os.getenv("SOURCE_TYPE"),
-                "version": os.getenv("SOURCE_VERSION"),
-                "table": table,
-                "data": enhanced_data,
-            }
-
-            if local_run:
-                ## call to local docker container function
-                response = requests.post(
-                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=30,
-                )
-            else:
-                response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=30,
-                )
-
-            if response.status_code in (202, 200):
-                if update_status:
-                    self.update_execution(
-                        increment_completed_objects=len(enhanced_data),
-                    )
-                return True, None
-            error_msg = f"Status {response.status_code}: {response.text}"
-            self.log.error(error_msg)
-            return False, error_msg
-        except Exception as e:
-            error_msg = f"Error: {str(e)}"
-            self.log.error(error_msg, error_type=type(e).__name__)
-            return False, error_msg
 
     def update_execution(
         self,
@@ -449,18 +419,21 @@ class Context:
             if completed_at is not None:
                 payload["completedAt"] = completed_at
 
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
             if local_run:
                 response = requests.post(
                     f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.post(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     timeout=30,
                 )
 

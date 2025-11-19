@@ -8,7 +8,7 @@ from typing import Final
 
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
-from opentelemetry.trace.status import StatusCode
+from opentelemetry.propagate import extract
 from waitress import serve
 
 dictConfig(
@@ -132,6 +132,7 @@ def get_logger(name: str):
 flush_opentelemetry = setup_opentelemetry(app)
 logger = get_logger(SERVICE_NAME)
 tracer = get_tracer(SERVICE_NAME)
+meter = get_meter(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
@@ -147,13 +148,12 @@ class Event:
 
 
 class Context:
-    def __init__(self):
-        self.scan_id = None
-        self.scan_execution_id = None
-        self.sync_id = None
+    def __init__(self, caller_attributes: dict):
         self.user_id = None
-
+        self.tracer = tracer
+        self.meter = meter
         self.log = ContextLogger(self)
+        self.caller_attributes = caller_attributes
 
 
 class ContextLogger:
@@ -185,9 +185,8 @@ class ContextLogger:
             "event_type": event_type,
             "trace_id": format(span_context.trace_id, "032x") if span_context.is_valid else None,
             "span_id": format(span_context.span_id, "016x") if span_context.is_valid else None,
-            "scan_execution_id": self.context.scan_execution_id,
-            "sync_id": self.context.sync_id,
             "user_id": self.context.user_id,
+            **self.context.caller_attributes,
             **attributes,
         }
 
@@ -250,43 +249,48 @@ def format_response(resp):
     return resp
 
 
+@app.before_request
+def extract_trace_context():
+    headers = dict(request.headers)
+    ctx = extract(headers)
+    trace.set_span_in_context(ctx)
+
+
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
-    with tracer.start_as_current_span("process_request") as span:
-        event = Event()
-        context = Context()
+    event = Event()
 
-        context.log.info(
-            "Received request",
-            http_method=event.method,
-            http_path=event.path,
-            http_query=dict(event.query),
+    caller_attributes = {
+        "scan_id": event.headers.get("Scan-Id"),
+        "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+        "sync_id": event.headers.get("Sync-Id"),
+        "sync_execution_id": event.headers.get("Sync-Execution-Id"),
+    }
+    context = Context(caller_attributes)
+
+    context.log.info(
+        "Received request",
+        http_method=event.method,
+        http_path=event.path,
+        http_query=dict(event.query),
+    )
+
+    try:
+        response_data = handler.handle(event, context)
+        resp = format_response(response_data)
+
+        status_code = resp[1] if isinstance(resp, tuple) else 200
+        context.log.info("Request completed", http_status_code=status_code)
+
+        return resp
+    except Exception as e:
+        context.log.error(
+            "Request failed",
+            error_type=type(e).__name__,
+            error_message=str(e),
         )
-
-        try:
-            with tracer.start_as_current_span("handle_request"):
-                response_data = handler.handle(event, context)
-
-            with tracer.start_as_current_span("format_response"):
-                resp = format_response(response_data)
-
-            status_code = resp[1] if isinstance(resp, tuple) else 200
-            span.set_attribute("http.status_code", status_code)
-            span.set_status(StatusCode.OK)
-            context.log.info("Request completed", http_status_code=status_code)
-
-            return resp
-        except Exception as e:
-            span.set_attribute("http.status_code", 500)
-            span.record_exception(e)
-            span.set_status(StatusCode.ERROR)
-            context.log.error(
-                "Request failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            raise
+        raise
 
 
 def handle_shutdown(signum, frame):
