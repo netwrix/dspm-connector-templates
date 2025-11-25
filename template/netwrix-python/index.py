@@ -569,6 +569,11 @@ def format_response(resp):
     return resp
 
 
+@app.get("/health")
+def health():
+    return jsonify(status="ok")
+
+
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path: str):
