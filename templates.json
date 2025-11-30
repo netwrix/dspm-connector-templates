@@ -1,0 +1,22 @@
+[
+    {
+        "template": "python-connector",
+        "platform": "x86_64",
+        "language": "Python",
+        "source": "netwrix",
+        "description": "Python Connector Template",
+        "repo": "https://github.com/netwrix/dspm-connector-templates",
+        "official": "false",
+        "recommended": true
+    },
+    {
+        "template": "python-function-common",
+        "platform": "x86_64",
+        "language": "Python",
+        "source": "netwrix",
+        "description": "Common Functions Python Template",
+        "repo": "https://github.com/netwrix/dspm-connector-templates",
+        "official": "false",
+        "recommended": true
+    }
+]
