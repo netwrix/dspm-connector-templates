@@ -403,6 +403,75 @@ class Context:
             self.log.error(error_msg, error_type=type(e).__name__)
             raise
 
+    def delete_scan_data(self, names: list[str] | None = None) -> tuple[bool, str | None]:
+        """
+        Delete scan data from the scan-data function for the current scan_id.
+
+        Args:
+            names: Optional list of item names to delete. If None, deletes all data for the scan_id.
+
+        Returns:
+            tuple: (success: bool, error_message: str | None)
+
+        Raises:
+            ValueError: If scan_id is not set
+        """
+        if self.function_type == "sync":
+            scan_id = self.sync_id
+        else:
+            scan_id = self.scan_id
+
+        if not scan_id:
+            raise ValueError("scan_id must be set to delete scan data")
+
+        local_run = self.run_local == "true"
+
+        try:
+            # Build params with scanId and optional name parameters
+            params = {"scanId": scan_id}
+            if names:
+                # Add multiple name parameters to the query string
+                params["name"] = names
+
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.delete(
+                    f"http://{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}:8080",
+                    params=params,
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.delete(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}",
+                    params=params,
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    log_attrs = {}
+                    if names:
+                        log_attrs["deleted_names"] = names
+                        log_attrs["deleted_count"] = len(names)
+                    self.log.info("Deleted scan data successfully", **log_attrs)
+                    return True, None
+                error_msg = f"Failed to delete scan data: {result.get('error', 'Unknown error')}"
+                self.log.error(error_msg)
+                return False, error_msg
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            self.log.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error deleting scan data: {str(e)}"
+            self.log.error(error_msg, error_type=type(e).__name__)
+            return False, error_msg
+
     def set_scan_data(self, data: dict) -> tuple[bool, str | None]:
         """
         Save scan data to the scan-data function for the current scan_id.
