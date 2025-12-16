@@ -346,6 +346,130 @@ class Context:
             headers["Sync-Execution-Id"] = self.sync_execution_id
         return headers
 
+    def get_scan_data(self) -> dict:
+        """
+        Retrieve scan data from the scan-data function for the current scan_id.
+
+        Returns:
+            dict: Dictionary containing the scan data key-value pairs
+
+        Raises:
+            ValueError: If scan_id is not set
+            Exception: If the request fails
+        """
+        if self.function_type == "sync":
+            scan_id = self.sync_id
+        else:
+            scan_id = self.scan_id
+
+        if not scan_id:
+            raise ValueError("scan_id must be set to retrieve scan data")
+
+        local_run = self.run_local == "true"
+
+        try:
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.get(
+                    f"http://{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}:8080",
+                    params={"scanId": scan_id},
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.get(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}",
+                    params={"scanId": scan_id},
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    self.log.info("Retrieved scan data successfully", key_count=len(result.get("data", {})))
+                    return result.get("data", {})
+                error_msg = f"Failed to retrieve scan data: {result.get('error', 'Unknown error')}"
+                self.log.error(error_msg)
+                raise Exception(error_msg)
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            self.log.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = f"Error retrieving scan data: {str(e)}"
+            self.log.error(error_msg, error_type=type(e).__name__)
+            raise
+
+    def set_scan_data(self, data: dict) -> tuple[bool, str | None]:
+        """
+        Save scan data to the scan-data function for the current scan_id.
+
+        Args:
+            data: Dictionary of key-value pairs to save
+
+        Returns:
+            tuple: (success: bool, error_message: str | None)
+
+        Raises:
+            ValueError: If scan_id is not set or data is not a dictionary
+        """
+        if self.function_type == "sync":
+            scan_id = self.sync_id
+        else:
+            scan_id = self.scan_id
+
+        if not scan_id:
+            raise ValueError("scan_id must be set to save scan data")
+
+        if not isinstance(data, dict):
+            raise ValueError("data must be a dictionary")
+
+        local_run = self.run_local == "true"
+
+        try:
+            payload = {
+                "scanId": scan_id,
+                "data": data
+            }
+
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.post(
+                    f"http://{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}:8080",
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}",
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    self.log.info("Saved scan data successfully", key_count=len(data))
+                    return True, None
+                error_msg = f"Failed to save scan data: {result.get('error', 'Unknown error')}"
+                self.log.error(error_msg)
+                return False, error_msg
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            self.log.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error saving scan data: {str(e)}"
+            self.log.error(error_msg, error_type=type(e).__name__)
+            return False, error_msg
+
     def create_thread(self, target, *args, **kwargs):
         """
         Create a thread that automatically inherits the current OpenTelemetry context.
