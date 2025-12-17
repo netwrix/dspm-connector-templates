@@ -357,10 +357,7 @@ class Context:
             ValueError: If scan_id is not set
             Exception: If the request fails
         """
-        if self.function_type == "sync":
-            scan_id = self.sync_id
-        else:
-            scan_id = self.scan_id
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
 
         if not scan_id:
             raise ValueError("scan_id must be set to retrieve connector state")
@@ -416,10 +413,7 @@ class Context:
         Raises:
             ValueError: If scan_id is not set
         """
-        if self.function_type == "sync":
-            scan_id = self.sync_id
-        else:
-            scan_id = self.scan_id
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
 
         if not scan_id:
             raise ValueError("scan_id must be set to delete connector state")
@@ -485,10 +479,7 @@ class Context:
         Raises:
             ValueError: If scan_id is not set or data is not a dictionary
         """
-        if self.function_type == "sync":
-            scan_id = self.sync_id
-        else:
-            scan_id = self.scan_id
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
 
         if not scan_id:
             raise ValueError("scan_id must be set to save connector state")
