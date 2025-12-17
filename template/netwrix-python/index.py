@@ -346,12 +346,12 @@ class Context:
             headers["Sync-Execution-Id"] = self.sync_execution_id
         return headers
 
-    def get_scan_data(self) -> dict:
+    def get_connector_state(self) -> dict:
         """
-        Retrieve scan data from the scan-data function for the current scan_id.
+        Retrieve connector state from the connector-state function for the current scan_id.
 
         Returns:
-            dict: Dictionary containing the scan data key-value pairs
+            dict: Dictionary containing the connector state key-value pairs
 
         Raises:
             ValueError: If scan_id is not set
@@ -363,7 +363,7 @@ class Context:
             scan_id = self.scan_id
 
         if not scan_id:
-            raise ValueError("scan_id must be set to retrieve scan data")
+            raise ValueError("scan_id must be set to retrieve connector state")
 
         local_run = self.run_local == "true"
 
@@ -373,14 +373,14 @@ class Context:
 
             if local_run:
                 response = requests.get(
-                    f"http://{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}:8080",
+                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
                     params={"scanId": scan_id},
                     headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.get(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}",
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
                     params={"scanId": scan_id},
                     headers=headers,
                     timeout=30,
@@ -389,9 +389,9 @@ class Context:
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
-                    self.log.info("Retrieved scan data successfully", key_count=len(result.get("data", {})))
+                    self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
                     return result.get("data", {})
-                error_msg = f"Failed to retrieve scan data: {result.get('error', 'Unknown error')}"
+                error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
                 self.log.error(error_msg)
                 raise Exception(error_msg)
 
@@ -399,13 +399,13 @@ class Context:
             self.log.error(error_msg)
             raise Exception(error_msg)
         except Exception as e:
-            error_msg = f"Error retrieving scan data: {str(e)}"
+            error_msg = f"Error retrieving connector state: {str(e)}"
             self.log.error(error_msg, error_type=type(e).__name__)
             raise
 
-    def delete_scan_data(self, names: list[str] | None = None) -> tuple[bool, str | None]:
+    def delete_connector_state(self, names: list[str] | None = None) -> tuple[bool, str | None]:
         """
-        Delete scan data from the scan-data function for the current scan_id.
+        Delete connector state from the connector-state function for the current scan_id.
 
         Args:
             names: Optional list of item names to delete. If None, deletes all data for the scan_id.
@@ -422,7 +422,7 @@ class Context:
             scan_id = self.scan_id
 
         if not scan_id:
-            raise ValueError("scan_id must be set to delete scan data")
+            raise ValueError("scan_id must be set to delete connector state")
 
         local_run = self.run_local == "true"
 
@@ -438,14 +438,14 @@ class Context:
 
             if local_run:
                 response = requests.delete(
-                    f"http://{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}:8080",
+                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
                     params=params,
                     headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.delete(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}",
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
                     params=params,
                     headers=headers,
                     timeout=30,
@@ -458,9 +458,9 @@ class Context:
                     if names:
                         log_attrs["deleted_names"] = names
                         log_attrs["deleted_count"] = len(names)
-                    self.log.info("Deleted scan data successfully", **log_attrs)
+                    self.log.info("Deleted connector state successfully", **log_attrs)
                     return True, None
-                error_msg = f"Failed to delete scan data: {result.get('error', 'Unknown error')}"
+                error_msg = f"Failed to delete connector state: {result.get('error', 'Unknown error')}"
                 self.log.error(error_msg)
                 return False, error_msg
 
@@ -468,13 +468,13 @@ class Context:
             self.log.error(error_msg)
             return False, error_msg
         except Exception as e:
-            error_msg = f"Error deleting scan data: {str(e)}"
+            error_msg = f"Error deleting connector state: {str(e)}"
             self.log.error(error_msg, error_type=type(e).__name__)
             return False, error_msg
 
-    def set_scan_data(self, data: dict) -> tuple[bool, str | None]:
+    def set_connector_state(self, data: dict) -> tuple[bool, str | None]:
         """
-        Save scan data to the scan-data function for the current scan_id.
+        Save connector state to the connector-state function for the current scan_id.
 
         Args:
             data: Dictionary of key-value pairs to save
@@ -491,7 +491,7 @@ class Context:
             scan_id = self.scan_id
 
         if not scan_id:
-            raise ValueError("scan_id must be set to save scan data")
+            raise ValueError("scan_id must be set to save connector state")
 
         if not isinstance(data, dict):
             raise ValueError("data must be a dictionary")
@@ -509,14 +509,14 @@ class Context:
 
             if local_run:
                 response = requests.post(
-                    f"http://{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}:8080",
+                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
                     json=payload,
                     headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('SCAN_DATA_FUNCTION', 'scan-data')}",
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
                     json=payload,
                     headers=headers,
                     timeout=30,
@@ -525,9 +525,9 @@ class Context:
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
-                    self.log.info("Saved scan data successfully", key_count=len(data))
+                    self.log.info("Saved connector state successfully", key_count=len(data))
                     return True, None
-                error_msg = f"Failed to save scan data: {result.get('error', 'Unknown error')}"
+                error_msg = f"Failed to save connector state: {result.get('error', 'Unknown error')}"
                 self.log.error(error_msg)
                 return False, error_msg
 
@@ -535,7 +535,7 @@ class Context:
             self.log.error(error_msg)
             return False, error_msg
         except Exception as e:
-            error_msg = f"Error saving scan data: {str(e)}"
+            error_msg = f"Error saving connector state: {str(e)}"
             self.log.error(error_msg, error_type=type(e).__name__)
             return False, error_msg
 
