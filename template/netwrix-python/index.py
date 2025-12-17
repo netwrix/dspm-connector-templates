@@ -490,10 +490,7 @@ class Context:
         local_run = self.run_local == "true"
 
         try:
-            payload = {
-                "scanId": scan_id,
-                "data": data
-            }
+            payload = {"scanId": scan_id, "data": data}
 
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
