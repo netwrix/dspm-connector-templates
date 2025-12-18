@@ -389,15 +389,11 @@ class Context:
                     self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
                     return result.get("data", {})
                 error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
-                self.log.error(error_msg)
                 raise Exception(error_msg)
 
             error_msg = f"Status {response.status_code}: {response.text}"
-            self.log.error(error_msg)
             raise Exception(error_msg)
-        except Exception as e:
-            error_msg = f"Error retrieving connector state: {str(e)}"
-            self.log.error(error_msg, error_type=type(e).__name__)
+        except Exception:
             raise
 
     def delete_connector_state(self, names: list[str] | None = None) -> tuple[bool, str | None]:
@@ -455,15 +451,12 @@ class Context:
                     self.log.info("Deleted connector state successfully", **log_attrs)
                     return True, None
                 error_msg = f"Failed to delete connector state: {result.get('error', 'Unknown error')}"
-                self.log.error(error_msg)
                 return False, error_msg
 
             error_msg = f"Status {response.status_code}: {response.text}"
-            self.log.error(error_msg)
             return False, error_msg
         except Exception as e:
             error_msg = f"Error deleting connector state: {str(e)}"
-            self.log.error(error_msg, error_type=type(e).__name__)
             return False, error_msg
 
     def set_connector_state(self, data: dict) -> tuple[bool, str | None]:
@@ -516,15 +509,12 @@ class Context:
                     self.log.info("Saved connector state successfully", key_count=len(data))
                     return True, None
                 error_msg = f"Failed to save connector state: {result.get('error', 'Unknown error')}"
-                self.log.error(error_msg)
                 return False, error_msg
 
             error_msg = f"Status {response.status_code}: {response.text}"
-            self.log.error(error_msg)
             return False, error_msg
         except Exception as e:
             error_msg = f"Error saving connector state: {str(e)}"
-            self.log.error(error_msg, error_type=type(e).__name__)
             return False, error_msg
 
     def create_thread(self, target, *args, **kwargs):
