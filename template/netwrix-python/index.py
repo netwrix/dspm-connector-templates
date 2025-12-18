@@ -346,6 +346,177 @@ class Context:
             headers["Sync-Execution-Id"] = self.sync_execution_id
         return headers
 
+    def get_connector_state(self) -> dict:
+        """
+        Retrieve connector state from the connector-state function for the current scan_id.
+
+        Returns:
+            dict: Dictionary containing the connector state key-value pairs
+
+        Raises:
+            ValueError: If scan_id is not set
+            Exception: If the request fails
+        """
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
+
+        if not scan_id:
+            raise ValueError("scan_id must be set to retrieve connector state")
+
+        local_run = self.run_local == "true"
+
+        try:
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.get(
+                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
+                    params={"scanId": scan_id},
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.get(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
+                    params={"scanId": scan_id},
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
+                    return result.get("data", {})
+                error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
+                raise Exception(error_msg)
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            raise Exception(error_msg)
+        except Exception:
+            raise
+
+    def delete_connector_state(self, names: list[str] | None = None) -> tuple[bool, str | None]:
+        """
+        Delete connector state from the connector-state function for the current scan_id.
+
+        Args:
+            names: Optional list of item names to delete. If None, deletes all data for the scan_id.
+
+        Returns:
+            tuple: (success: bool, error_message: str | None)
+
+        Raises:
+            ValueError: If scan_id is not set
+        """
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
+
+        if not scan_id:
+            raise ValueError("scan_id must be set to delete connector state")
+
+        local_run = self.run_local == "true"
+
+        try:
+            # Build params with scanId and optional name parameters
+            params = {"scanId": scan_id}
+            if names:
+                # Add multiple name parameters to the query string
+                params["name"] = names
+
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.delete(
+                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
+                    params=params,
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.delete(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
+                    params=params,
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    log_attrs = {}
+                    if names:
+                        log_attrs["deleted_names"] = names
+                        log_attrs["deleted_count"] = len(names)
+                    self.log.info("Deleted connector state successfully", **log_attrs)
+                    return True, None
+                error_msg = f"Failed to delete connector state: {result.get('error', 'Unknown error')}"
+                return False, error_msg
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error deleting connector state: {str(e)}"
+            return False, error_msg
+
+    def set_connector_state(self, data: dict) -> tuple[bool, str | None]:
+        """
+        Save connector state to the connector-state function for the current scan_id.
+
+        Args:
+            data: Dictionary of key-value pairs to save
+
+        Returns:
+            tuple: (success: bool, error_message: str | None)
+
+        Raises:
+            ValueError: If scan_id is not set or data is not a dictionary
+        """
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
+
+        if not scan_id:
+            raise ValueError("scan_id must be set to save connector state")
+
+        if not isinstance(data, dict):
+            raise ValueError("data must be a dictionary")
+
+        local_run = self.run_local == "true"
+
+        try:
+            payload = {"scanId": scan_id, "data": data}
+
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.post(
+                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    self.log.info("Saved connector state successfully", key_count=len(data))
+                    return True, None
+                error_msg = f"Failed to save connector state: {result.get('error', 'Unknown error')}"
+                return False, error_msg
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error saving connector state: {str(e)}"
+            return False, error_msg
+
     def create_thread(self, target, *args, **kwargs):
         """
         Create a thread that automatically inherits the current OpenTelemetry context.
