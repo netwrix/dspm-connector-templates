@@ -448,6 +448,174 @@ class Context:
             self.log.error(error_msg)
             return False, error_msg
 
+    def mark_implicit_deletions(self, table_names: list[str] | None = None) -> dict[str, int]:
+        """
+        Marks objects as deleted if they weren't seen in the current scan/sync execution.
+        Queries ClickHouse to find records that:
+        - Belong to this scan_id/sync_id
+        - Are currently marked as active (is_deleted = 0)
+        - Were NOT seen in the current execution (scan_execution_id/sync_execution_id != current)
+
+        Args:
+            table_names: List of table names to check. If None, checks all tables
+                         that had data saved in this execution.
+
+        Returns:
+            dict: Statistics about deletions marked per table
+                  Format: {"table_name": count, ...} or {"table_name": {"error": "msg"}, ...}
+        """
+        # If no tables specified, use all tables that were written to
+        if table_names is None:
+            table_names = list(self.tables.keys())
+
+        if not table_names:
+            self.log.info("No tables to check for implicit deletions")
+            return {}
+
+        deletion_stats = {}
+
+        for table in table_names:
+            try:
+                deleted_count = self._mark_table_deletions(table)
+                deletion_stats[table] = deleted_count
+                self.log.info(f"Marked implicit deletions", table=table, count=deleted_count)
+            except Exception as e:
+                self.log.error(f"Failed to mark deletions", table=table, error=str(e), error_type=type(e).__name__)
+                deletion_stats[table] = {"error": str(e)}
+
+        return deletion_stats
+
+    def _mark_table_deletions(self, table: str) -> int:
+        """
+        Query and reinsert deleted objects for a specific table.
+
+        Returns:
+            int: Number of objects marked as deleted
+        """
+        local_run = self.run_local == "true"
+        source_type = os.getenv("SOURCE_TYPE", "")
+        source_version = os.getenv("SOURCE_VERSION", "")
+
+        # Determine which ID fields to use based on function type
+        if self.function_type == "sync":
+            id_field = "sync_id"
+            execution_id_field = "sync_execution_id"
+            id_value = self.sync_id
+            execution_id_value = self.sync_execution_id
+        else:
+            id_field = "scan_id"
+            execution_id_field = "scan_execution_id"
+            id_value = self.scan_id
+            execution_id_value = self.scan_execution_id
+
+        # Build the full table name (convert hyphens and dots to underscores for ClickHouse)
+        source_type_normalized = source_type.replace("-", "_").replace(".", "_")
+        source_version_normalized = source_version.replace("-", "_").replace(".", "_")
+        full_table_name = f"{source_type_normalized}_{source_version_normalized}_{table}"
+
+        # Force ClickHouse to merge all table parts before querying
+        # This ensures the _latest view includes data from the current execution
+        optimize_query = f"OPTIMIZE TABLE {full_table_name} FINAL"
+        try:
+            optimize_payload = {"query": optimize_query}
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                optimize_response = requests.post(
+                    f"http://{os.getenv('DATA_QUERY_FUNCTION', 'data-query')}:8080",
+                    json=optimize_payload,
+                    headers=headers,
+                    timeout=300,
+                )
+            else:
+                optimize_response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('DATA_QUERY_FUNCTION', 'data-query')}",
+                    json=optimize_payload,
+                    headers=headers,
+                    timeout=300,
+                )
+
+            if optimize_response.status_code not in (200, 202):
+                self.log.warning(
+                    "Failed to optimize table before implicit deletion check",
+                    table=table,
+                    status=optimize_response.status_code,
+                )
+        except Exception as e:
+            self.log.warning(
+                "Failed to optimize table before implicit deletion check",
+                table=table,
+                error=str(e),
+            )
+
+        # Query for objects not seen in current execution
+        query = f"""
+        SELECT *
+        FROM {full_table_name}_latest
+        WHERE {id_field} = '{id_value}'
+          AND is_deleted = 0
+          AND {execution_id_field} != '{execution_id_value}'
+        """
+
+        # Execute query via data-query function
+        try:
+            payload = {"query": query}
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                response = requests.post(
+                    f"http://{os.getenv('DATA_QUERY_FUNCTION', 'data-query')}:8080",
+                    json=payload,
+                    headers=headers,
+                    timeout=300,
+                )
+            else:
+                response = requests.post(
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('DATA_QUERY_FUNCTION', 'data-query')}",
+                    json=payload,
+                    headers=headers,
+                    timeout=300,
+                )
+
+            if response.status_code not in (200, 202):
+                error_msg = f"Query failed with status {response.status_code}: {response.text}"
+                self.log.error(error_msg, table=table)
+                raise Exception(error_msg)
+
+            result = response.json()
+            deleted_objects = result.get("data", [])
+
+            if not deleted_objects:
+                return 0
+
+            # Mark objects as deleted and reinsert them
+            for obj in deleted_objects:
+                obj["is_deleted"] = 1
+                obj[execution_id_field] = execution_id_value
+                # Remove the auto-added timestamp fields that would be re-added by save_object
+                obj.pop("scanned_at", None)
+                obj.pop("synced_at", None)
+
+                # Save with update_status=False to avoid counting these as new objects
+                self.save_object(table, obj, update_status=False)
+
+            self.log.info(
+                f"Prepared {len(deleted_objects)} deletion markers",
+                table=table,
+                count=len(deleted_objects),
+            )
+
+            return len(deleted_objects)
+
+        except Exception as e:
+            self.log.error(
+                "Error querying for implicit deletions",
+                table=table,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            raise
+
 
 class ContextLogger:
     def __init__(self, context: Context):
