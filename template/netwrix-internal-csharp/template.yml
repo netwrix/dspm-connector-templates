@@ -1,0 +1,7 @@
+language: dotnet8-csharp
+fprocess: dotnet ./Root.dll
+welcome_message: |
+  You have created a function using C#, dotnet 8 and 
+  WebApplication using the minimal API style.
+
+  Manage project dependencies via NuGet, and Function.csproj.
