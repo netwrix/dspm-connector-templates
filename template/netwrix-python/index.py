@@ -478,9 +478,9 @@ class Context:
             try:
                 deleted_count = self._mark_table_deletions(table)
                 deletion_stats[table] = deleted_count
-                self.log.info(f"Marked implicit deletions", table=table, count=deleted_count)
+                self.log.info("Marked implicit deletions", table=table, count=deleted_count)
             except Exception as e:
-                self.log.error(f"Failed to mark deletions", table=table, error=str(e), error_type=type(e).__name__)
+                self.log.error("Failed to mark deletions", table=table, error=str(e), error_type=type(e).__name__)
                 deletion_stats[table] = {"error": str(e)}
 
         return deletion_stats
