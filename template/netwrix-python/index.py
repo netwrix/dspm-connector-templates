@@ -513,41 +513,6 @@ class Context:
         source_version_normalized = source_version.replace("-", "_").replace(".", "_")
         full_table_name = f"{source_type_normalized}_{source_version_normalized}_{table}"
 
-        # Force ClickHouse to merge all table parts before querying
-        # This ensures the _latest view includes data from the current execution
-        optimize_query = f"OPTIMIZE TABLE {full_table_name} FINAL"
-        try:
-            optimize_payload = {"query": optimize_query}
-            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
-
-            if local_run:
-                optimize_response = requests.post(
-                    f"http://{os.getenv('DATA_QUERY_FUNCTION', 'data-query')}:8080",
-                    json=optimize_payload,
-                    headers=headers,
-                    timeout=300,
-                )
-            else:
-                optimize_response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('DATA_QUERY_FUNCTION', 'data-query')}",
-                    json=optimize_payload,
-                    headers=headers,
-                    timeout=300,
-                )
-
-            if optimize_response.status_code not in (200, 202):
-                self.log.warning(
-                    "Failed to optimize table before implicit deletion check",
-                    table=table,
-                    status=optimize_response.status_code,
-                )
-        except Exception as e:
-            self.log.warning(
-                "Failed to optimize table before implicit deletion check",
-                table=table,
-                error=str(e),
-            )
-
         # Query for objects not seen in current execution
         query = f"""
         SELECT *
