@@ -1,0 +1,166 @@
+using System.Diagnostics;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+
+namespace function;
+
+public class FunctionContext
+{
+    private readonly HttpContext _httpContext;
+    private readonly ILogger<FunctionContext> _logger;
+    private readonly string _serviceName;
+    private readonly ILoggerFactory _loggerFactory;
+
+    public FunctionContext(HttpContext httpContext, ILogger<FunctionContext> logger, ILoggerFactory loggerFactory)
+    {
+        _httpContext = httpContext;
+        _logger = logger;
+        _loggerFactory = loggerFactory;
+
+        // Build service name matching pattern
+        var sourceType = Environment.GetEnvironmentVariable("SOURCE_TYPE") ?? "internal";
+        var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
+        _serviceName = $"{sourceType}-{functionType}";
+
+        // Initialize properties
+        ScanId = Environment.GetEnvironmentVariable("SCAN_ID");
+        SyncId = Environment.GetEnvironmentVariable("SYNC_ID");
+        FunctionType = functionType;
+        
+        Secrets = new Dictionary<string, string>();
+    }
+
+    public Dictionary<string, string> Secrets { get; private set; }
+    public string? ScanId { get; set; }
+    public string? SyncId { get; set; }
+    public Guid ScanExecutionId { get; set; }
+    public Guid SyncExecutionId { get; set; }
+    public string? FunctionType { get; set; }
+    public Guid SourceId { get; set; }
+
+    public void LoadSecrets()
+    {
+        var secretMappings = Environment.GetEnvironmentVariable("SECRET_MAPPINGS") ?? "";
+        var mappings = secretMappings.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var mapping in mappings)
+        {
+            var parts = mapping.Split(':');
+            if (parts.Length == 2)
+            {
+                var key = parts[0];
+                var path = parts[1];
+                try
+                {
+                    var secretPath = Path.Combine("/var/openfaas/secrets/", path);
+                    if (File.Exists(secretPath))
+                    {
+                        Secrets[key] = File.ReadAllText(secretPath).Trim();
+                        Log("Loaded secret", new { secret_name = key });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogError("Error reading secret file", new { filename = path, error = ex.Message, error_type = ex.GetType().Name });
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Log with automatic context enrichment and trace correlation.
+    /// </summary>
+    public void Log(string message, object? attributes = null)
+    {
+        LogInternal(LogLevel.Information, message, "operation", attributes);
+    }
+
+    /// <summary>
+    /// Log an error with automatic context enrichment and trace correlation.
+    /// </summary>
+    public void LogError(string message, object? attributes = null)
+    {
+        LogInternal(LogLevel.Error, message, "error", attributes);
+    }
+
+    /// <summary>
+    /// Log a warning with automatic context enrichment and trace correlation.
+    /// </summary>
+    public void LogWarning(string message, object? attributes = null)
+    {
+        LogInternal(LogLevel.Warning, message, "operation", attributes);
+    }
+
+    /// <summary>
+    /// Log debug information with automatic context enrichment and trace correlation.
+    /// </summary>
+    public void LogDebug(string message, object? attributes = null)
+    {
+        LogInternal(LogLevel.Debug, message, "operation", attributes);
+    }
+
+    private void LogInternal(LogLevel level, string message, string eventType, object? attributes)
+    {
+        // Get current trace context for correlation
+        var activity = Activity.Current;
+        var traceId = activity?.TraceId.ToString();
+        var spanId = activity?.SpanId.ToString();
+
+        // Build state dictionary with context enrichment
+        var state = new Dictionary<string, object?>
+        {
+            ["service"] = _serviceName,
+            ["event_type"] = eventType,
+            ["trace_id"] = traceId,
+            ["span_id"] = spanId,
+            ["scan_id"] = ScanId,
+            ["scan_execution_id"] = ScanExecutionId != Guid.Empty ? ScanExecutionId.ToString() : null,
+            ["sync_id"] = SyncId,
+            ["sync_execution_id"] = SyncExecutionId != Guid.Empty ? SyncExecutionId.ToString() : null,
+            ["function_type"] = FunctionType
+        };
+
+        // Add custom attributes
+        if (attributes != null)
+        {
+            var props = attributes.GetType().GetProperties();
+            foreach (var prop in props)
+            {
+                state[prop.Name] = prop.GetValue(attributes);
+            }
+        }
+
+        // Remove null values
+        var filteredState = state.Where(kvp => kvp.Value != null).ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+        // Log using ILogger which will be exported via OpenTelemetry
+        using (_logger.BeginScope(filteredState))
+        {
+            _logger.Log(level, "{Message}", message);
+        }
+    }
+
+    public FunctionResponse TestConnectionSuccessResponse()
+    {
+        return new FunctionResponse
+        {
+            StatusCode = 200,
+            Body = new Dictionary<string, object>()
+        };
+    }
+
+    public FunctionResponse ErrorResponse(bool clientError, string errorMessage)
+    {
+        var statusCode = clientError ? 400 : 500;
+        LogError(errorMessage, new { statusCode });
+
+        return new FunctionResponse
+        {
+            StatusCode = statusCode,
+            Body = new Dictionary<string, object>
+            {
+                ["error"] = errorMessage
+            }
+        };
+    }
+}
