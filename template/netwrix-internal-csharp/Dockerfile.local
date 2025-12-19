@@ -1,16 +1,19 @@
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
 
+ARG FUNCTION_DIR
+
 # Install CA certificates and curl for better SSL handling
 RUN apk add --no-cache ca-certificates curl
 
 WORKDIR /src
 
 # Copy local packages first
-COPY packages/ ./packages/
+COPY ${FUNCTION_DIR}/packages/ ./packages/
+COPY ./template/netwrix-internal-csharp/NuGet.config .
 
-# Copy project file
-COPY Function.csproj ./
+# Copy project file from function directory
+COPY ${FUNCTION_DIR}/Function.csproj ./
 
 # Clear NuGet cache and configure sources with timeouts
 RUN dotnet nuget locals all --clear
@@ -20,21 +23,16 @@ RUN dotnet nuget list source
 # Restore with timeouts and offline-first approach
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV NUGET_XMLDOC_MODE=skip
-RUN timeout 300 dotnet restore --verbosity normal \
-    --source ./packages \
-    --source https://api.nuget.org/v3/index.json \
-    --runtime linux-musl-x64 \
-    --no-cache \
-    --disable-parallel || \
-    (echo "Attempting offline restore..." && \
-     dotnet restore --verbosity normal \
-     --source ./packages \
-     --runtime linux-musl-x64 \
-     --no-cache \
-     --disable-parallel)
+RUN timeout 300 dotnet restore --verbosity normal --configfile NuGet.config
 
-# Copy all source files
-COPY *.cs ./
+# Copy Program.cs from template (contains the entry point)
+COPY ./template/netwrix-internal-csharp/Program.cs ./
+
+# Copy template source files first (shared classes)
+COPY ./template/netwrix-internal-csharp/function/*.cs ./
+
+# Copy all source files from function directory (overwrites if duplicates exist)
+COPY ${FUNCTION_DIR}/*.cs ./
 RUN dotnet build -c Release -o /app/build
 RUN dotnet publish -c Release -o /app/publish --no-self-contained --framework net8.0
 
