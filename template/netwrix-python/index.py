@@ -229,9 +229,6 @@ class BatchManager:
                 + b'"sourceType":"'
                 + os.getenv("SOURCE_TYPE", "").encode("utf-8")
                 + b'",'
-                + b'"version":"'
-                + os.getenv("SOURCE_VERSION", "").encode("utf-8")
-                + b'",'
                 + b'"table":"'
                 + self.table_name.encode("utf-8")
                 + b'",'
