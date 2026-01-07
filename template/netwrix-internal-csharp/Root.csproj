@@ -8,9 +8,6 @@
 
   <ItemGroup>
     <ProjectReference Include="function\Function.csproj" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="1.3.2.1" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="1.3.2.1" />
-    <PackageReference Include="Netwrix.UK.Core" Version="5.2.2.1" />
     <PackageReference Include="OpenTelemetry" Version="1.10.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.10.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.10.1" />
