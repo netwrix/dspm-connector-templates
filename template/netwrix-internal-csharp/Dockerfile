@@ -12,10 +12,11 @@ COPY NuGet.config .
 COPY function/packages/ ./packages/
 COPY Root.csproj .
 COPY function/Function.csproj function/
-RUN dotnet nuget add source /src/packages --name local || true
+RUN dotnet nuget remove source local 2>/dev/null || true && dotnet nuget add source /src/packages --name local
 RUN dotnet restore Root.csproj --configfile NuGet.config
 COPY Program.cs .
-COPY function/ ./function/
+COPY FunctionContext.cs FunctionRequest.cs FunctionResponse.cs ./function/
+COPY function/*.cs ./function/
 RUN dotnet publish -c release -o /app
 
 RUN mkdir -p function/static
