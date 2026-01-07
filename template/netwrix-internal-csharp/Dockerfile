@@ -1,22 +1,26 @@
-FROM --platform=${TARGETPLATFORM:-linux/amd64} ghcr.io/openfaas/of-watchdog:0.10.1 as watchdog
+FROM ghcr.io/openfaas/of-watchdog:0.10.1 AS watchdog
 
-FROM --platform=${BUILDPLATFORM:-linux/amd64} mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 
-ENV DOTNET_CLI_TELEMETRY_OPTOUT 1
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 WORKDIR /src
+COPY NuGet.config .
+COPY function/packages/ ./packages/
 COPY Root.csproj .
 COPY function/Function.csproj function/
-RUN dotnet restore Root.csproj
-COPY . .
+RUN dotnet nuget add source /src/packages --name local || true
+RUN dotnet restore Root.csproj --configfile NuGet.config
+COPY Program.cs .
+COPY function/ ./function/
 RUN dotnet publish -c release -o /app
 
 RUN mkdir -p function/static
 
-FROM --platform=${TARGETPLATFORM:-linux/amd64}  mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
 
