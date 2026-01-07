@@ -8,10 +8,14 @@ ARG BUILDPLATFORM
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 WORKDIR /src
+COPY NuGet.config .
+COPY function/packages/ ./packages/
 COPY Root.csproj .
 COPY function/Function.csproj function/
-RUN dotnet restore Root.csproj
-COPY . .
+RUN dotnet nuget add source /src/packages --name local || true
+RUN dotnet restore Root.csproj --configfile NuGet.config
+COPY Program.cs .
+COPY function/ ./function/
 RUN dotnet publish -c release -o /app
 
 RUN mkdir -p function/static
