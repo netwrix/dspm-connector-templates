@@ -8,12 +8,13 @@ RUN apk add --no-cache ca-certificates curl
 
 WORKDIR /src
 
-# Copy local packages first
+# Copy local packages and config
 COPY ${FUNCTION_DIR}/packages/ ./packages/
 COPY ./template/netwrix-internal-csharp/NuGet.config .
 
-# Copy project file from function directory
-COPY ${FUNCTION_DIR}/Function.csproj ./
+# Copy project files
+COPY ./template/netwrix-internal-csharp/Root.csproj .
+COPY ${FUNCTION_DIR}/Function.csproj function/
 
 # Clear NuGet cache and configure sources with timeouts
 RUN dotnet nuget locals all --clear
@@ -29,12 +30,13 @@ RUN timeout 300 dotnet restore --verbosity normal --configfile NuGet.config
 # Copy Program.cs from template (contains the entry point)
 COPY ./template/netwrix-internal-csharp/Program.cs ./
 
-# Copy template source files first (shared classes)
-COPY ./template/netwrix-internal-csharp/*.cs ./
+# Copy template source files to function directory (shared classes)
+COPY ./template/netwrix-internal-csharp/FunctionContext.cs ./function/
+COPY ./template/netwrix-internal-csharp/FunctionRequest.cs ./function/
+COPY ./template/netwrix-internal-csharp/FunctionResponse.cs ./function/
 
-# Copy all source files from function directory (overwrites if duplicates exist)
-COPY ${FUNCTION_DIR}/*.cs ./
-RUN dotnet build -c Release -o /app/build
+# Copy all source files from function directory
+COPY ${FUNCTION_DIR}/*.cs ./function/
 RUN dotnet publish -c Release -o /app/publish --no-self-contained --framework net8.0
 
 # Runtime stage
@@ -50,7 +52,7 @@ COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
 
 # Configure environment
-ENV fprocess="dotnet Function.dll"
+ENV fprocess="dotnet Root.dll"
 ENV cgi_headers="true"
 ENV mode="http"
 ENV upstream_url="http://127.0.0.1:3000"
