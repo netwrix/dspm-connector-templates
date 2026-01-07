@@ -1,38 +1,61 @@
-FROM ghcr.io/openfaas/of-watchdog:0.10.1 AS watchdog
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-
-ARG TARGETPLATFORM
-ARG BUILDPLATFORM
-
-ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+# Install CA certificates and curl for better SSL handling
+RUN apk add --no-cache ca-certificates curl
 
 WORKDIR /src
-COPY NuGet.config .
+
+# Copy local packages and config
 COPY function/packages/ ./packages/
+COPY NuGet.config .
+
+# Copy project files
 COPY Root.csproj .
 COPY function/Function.csproj function/
-RUN dotnet nuget remove source local 2>/dev/null || true && dotnet nuget add source /src/packages --name local
-RUN dotnet restore Root.csproj --configfile NuGet.config
+
+# Clear NuGet cache and configure sources with timeouts
+RUN dotnet nuget locals all --clear
+RUN dotnet nuget remove source local || true
+RUN dotnet nuget add source ./packages --name local
+RUN dotnet nuget list source
+
+# Restore with timeouts and offline-first approach
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV NUGET_XMLDOC_MODE=skip
+RUN timeout 300 dotnet restore --verbosity normal --configfile NuGet.config
+
+# Copy Program.cs from template (contains the entry point)
 COPY Program.cs .
+
+# Copy template source files to function directory (shared classes)
 COPY FunctionContext.cs FunctionRequest.cs FunctionResponse.cs ./function/
+
+# Copy all source files from function directory
 COPY function/*.cs ./function/
-RUN dotnet publish -c release -o /app
+RUN dotnet publish -c Release -o /app/publish --no-self-contained --framework net8.0
 
-RUN mkdir -p function/static
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
-COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
+# Use existing app user or create one
+RUN id app >/dev/null 2>&1 || adduser -S app
+WORKDIR /app
+COPY --from=build /app/publish .
+
+# Set up OpenFaaS watchdog
+COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
 
-WORKDIR /app
-COPY --from=build /app .
-COPY --from=build src/function/static static
+# Configure environment
+ENV fprocess="dotnet Root.dll"
+ENV cgi_headers="true"
+ENV mode="http"
+ENV upstream_url="http://127.0.0.1:3000"
 
 USER app
 
-ENV fprocess="dotnet Root.dll"
-ENV upstream_url="http://127.0.0.1:3000"
-ENV mode="http"
+EXPOSE 8080
+HEALTHCHECK --interval=5s CMD [ -e /tmp/.lock ] || exit 1
 
-ENTRYPOINT ["fwatchdog"]
+CMD ["fwatchdog"]
