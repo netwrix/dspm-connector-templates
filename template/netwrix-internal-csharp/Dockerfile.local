@@ -17,6 +17,7 @@ COPY ${FUNCTION_DIR}/Function.csproj ./
 
 # Clear NuGet cache and configure sources with timeouts
 RUN dotnet nuget locals all --clear
+RUN dotnet nuget remove source local || true
 RUN dotnet nuget add source ./packages --name local
 RUN dotnet nuget list source
 
@@ -29,7 +30,7 @@ RUN timeout 300 dotnet restore --verbosity normal --configfile NuGet.config
 COPY ./template/netwrix-internal-csharp/Program.cs ./
 
 # Copy template source files first (shared classes)
-COPY ./template/netwrix-internal-csharp/function/*.cs ./
+COPY ./template/netwrix-internal-csharp/*.cs ./
 
 # Copy all source files from function directory (overwrites if duplicates exist)
 COPY ${FUNCTION_DIR}/*.cs ./
@@ -52,7 +53,7 @@ RUN chmod +x /usr/bin/fwatchdog
 ENV fprocess="dotnet Function.dll"
 ENV cgi_headers="true"
 ENV mode="http"
-ENV upstream_url="http://127.0.0.1:5000"
+ENV upstream_url="http://127.0.0.1:3000"
 
 USER app
 
