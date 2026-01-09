@@ -527,7 +527,7 @@ class Context:
         local_run = self.run_local == "true"
         try:
             # Build payload with only provided arguments
-            payload = {"type": self.function_type, "executionId": self.scan_execution_id}
+            payload = {"executionId": self.scan_execution_id}
 
             # Only include optional fields if they are provided (not None)
             if status is not None:
