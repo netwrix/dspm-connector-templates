@@ -309,12 +309,10 @@ class Context:
         Build headers dict with caller context information to pass to common functions.
         Only includes headers that have non-None values.
         """
-        headers = {
+        return {
             "Scan-Id": self.scan_id,
             "Scan-Execution-Id": self.scan_execution_id
         }
-       
-        return headers
 
     def get_connector_state(self) -> dict:
         """
