@@ -145,6 +145,7 @@ logger = get_logger(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
+from function.state_manager import StateManager  # noqa: E402
 
 
 # BatchManager is used to manage the batching of objects for a specific table. It will
@@ -303,8 +304,43 @@ class Context:
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
         self.tables: dict[str, BatchManager] = {}
+        self.state_manager: StateManager | None = None
 
         self.log = ContextLogger(self)
+
+    def initialize_state_manager(self, supported_states: dict[str, bool] | None = None) -> bool:
+        """
+        Initialize state management for stop/pause/resume operations
+        
+        Args:
+            supported_states: Dict of {state: bool} for supported operations
+                - 'stop': True (default, halt execution)
+                - 'pause': False (default, not supported)
+                - 'resume': False (default, not supported)
+        
+        Returns:
+            True if state manager initialized successfully, False otherwise
+        """
+        try:
+            self.state_manager = StateManager(
+                context=self,
+                supported_states=supported_states or {'stop': True}
+            )
+            
+            # Initialize Redis signal monitoring
+            if self.state_manager.initialize():
+                self.log.info(
+                    "State manager initialized",
+                    supported_states=self.state_manager.get_supported_states()
+                )
+                return True
+            else:
+                self.log.warning("State manager initialization failed (Redis unavailable)")
+                return False
+                
+        except Exception as e:
+            self.log.error(f"Error initializing state manager: {e}")
+            return False
 
     def test_connection_success_response(self):
         return {"statusCode": 200, "body": {}}
@@ -779,6 +815,9 @@ def call_handler(path: str):
             if context.function_type == "access-scan" or context.function_type == "sync":
                 context.update_execution(status="running")
                 context.log.info("Started operation", function_type=context.function_type)
+                
+                # Initialize state management for stop/pause/resume operations
+                context.initialize_state_manager({'stop': True})
 
             with tracer.start_as_current_span("handle_request"):
                 response_data = handler.handle(event, context)
@@ -818,6 +857,10 @@ def call_handler(path: str):
             span.set_attribute("http.status_code", status_code)
             span.set_status(StatusCode.OK)
             context.log.info("Request completed", http_status_code=status_code)
+            
+            # Cleanup state manager resources
+            if context.state_manager:
+                context.state_manager.close()
 
             return resp
         except Exception as e:
