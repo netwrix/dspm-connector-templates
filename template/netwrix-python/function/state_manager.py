@@ -5,6 +5,8 @@ This module provides a framework for managing scan/sync execution states,
 including stop/pause/resume operations. Connectors can declare their
 supported states and hook into state transition events.
 
+Note: Uses `from __future__ import annotations` for forward type references.
+
 Usage:
     class MyConnectorHandler:
         def __init__(self, context):
@@ -34,13 +36,15 @@ Usage:
                 })
 """
 
-import json
+from __future__ import annotations
+
 import logging
-import os
 import threading
 import time
-from datetime import datetime, UTC
 from typing import Optional, Dict, Any, Callable
+
+# Import here to allow for easier mocking in tests
+from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +62,7 @@ class StateManager:
 
     # Valid state transitions
     VALID_TRANSITIONS = {
-        'running': ['stopping', 'pausing', 'completed', 'failed'],
+        'running': ['stopping', 'pausing', 'completed', 'failed', 'stopped'],
         'stopping': ['stopped', 'failed'],
         'stopped': [],
         'pausing': ['paused', 'failed'],
@@ -77,7 +81,7 @@ class StateManager:
 
     def __init__(
         self,
-        context: 'Context',
+        context,
         supported_states: Optional[Dict[str, bool]] = None,
         checkpoint_interval: int = 60,
         signal_check_interval: int = 5
@@ -103,8 +107,8 @@ class StateManager:
         self.requested_state = None
         self.redis_handler = None
         self.control_context = None
-        self.last_signal_check = 0
-        self.last_checkpoint = 0
+        self.last_signal_check = time.time()
+        self.last_checkpoint = time.time()
         self._state_lock = threading.Lock()
         self._shutdown_event = threading.Event()
         self._on_state_change_callbacks = []
@@ -117,9 +121,6 @@ class StateManager:
             True if initialization successful, False otherwise
         """
         try:
-            # Import here to avoid circular imports
-            from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
-            
             # Get execution ID
             execution_id = self.context.sync_execution_id or self.context.scan_execution_id
             if not execution_id:
@@ -142,9 +143,6 @@ class StateManager:
             logger.info(f"State manager initialized (supported_states={self.supported_states})")
             return True
             
-        except ImportError as e:
-            logger.warning(f"Redis signal handler not available: {e}")
-            return False
         except Exception as e:
             logger.error(f"Failed to initialize state manager: {e}")
             return False
