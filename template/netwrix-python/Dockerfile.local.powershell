@@ -62,6 +62,10 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
     uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
+# Copy template-provided function files (state_manager, redis_signal_handler, etc)
+COPY --chown=app:app ./template/netwrix-python/function/ .
+
+# Copy function-specific code (handler, requirements, etc) - this overrides template defaults if present
 COPY --chown=app:app ${FUNCTION_DIR}/ .
 
 # PowerShell
