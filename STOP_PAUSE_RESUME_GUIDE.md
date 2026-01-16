@@ -13,39 +13,36 @@ All connectors have stop capability enabled by default. Other states can be opte
 
 ## Quick Start
 
-### 1. Declare Supported States (Optional)
+### 1. Initialize State Manager in Handler
 
-In your handler initialization or in the request, specify which states your connector supports:
-
-```python
-# In your handler function or __init__:
-def get_supported_states():
-    """Declare which operations this connector supports"""
-    return {
-        'stop': True,      # Support graceful termination (default)
-        'pause': True,     # Support pause (optional)
-        'resume': True,    # Support resume (optional)
-    }
-```
-
-### 2. Monitor for State Changes
-
-In your main scanning loop:
+In your handler, initialize the StateManager for stop/pause/resume support:
 
 ```python
+from function.state_manager import StateManager
+
 def handle(event, context):
     """Main handler function"""
     
-    # The Context object already has a state_manager initialized by the framework
-    # for scan and sync operations. Access it via context.state_manager
+    # Initialize state manager for this scan/sync operation
+    state_manager = StateManager(
+        context=context,
+        supported_states={'stop': True, 'pause': False, 'resume': False}
+    )
     
-    state_manager = context.state_manager
-    if not state_manager:
-        return context.error_response(False, "State management unavailable")
+    # Initialize Redis monitoring (connects to control streams)
+    if not state_manager.initialize():
+        # Redis unavailable - graceful degradation
+        context.log.warning("State management unavailable, continuing without stop capability")
+        state_manager = None
+    
+    return process_scan(state_manager, context)
+
+def process_scan(state_manager, context):
+    """Main scanning loop"""
     
     for item in items_to_process:
-        # Check for stop/pause signals periodically
-        if state_manager.should_stop():
+        # Check for stop signal periodically
+        if state_manager and state_manager.should_stop():
             context.log.info("Stop signal received, exiting gracefully")
             state_manager.shutdown('stopped')
             return context.access_scan_success_response()
@@ -53,24 +50,60 @@ def handle(event, context):
         # Process item...
         process_item(item)
         
-        # Optionally save progress checkpoint (for future resume)
-        if state_manager.should_checkpoint():
+        # Optionally save progress checkpoint
+        if state_manager and state_manager.should_checkpoint():
             state_manager.save_checkpoint({
-                'progress': {
-                    'processed_items': count,
-                    'last_item': item.id
-                },
+                'processed_items': count,
+                'last_item': item.id,
                 'timestamp': datetime.now(UTC).isoformat()
             })
     
     # Graceful completion
-    state_manager.shutdown('completed')
+    if state_manager:
+        state_manager.shutdown('completed')
     return context.access_scan_success_response()
+```
+
+### 2. Declare Supported States (Optional)
+
+Customize which states your connector supports during initialization:
+
+```python
+state_manager = StateManager(
+    context=context,
+    supported_states={
+        'stop': True,      # Support graceful termination (default)
+        'pause': False,    # Pause not yet supported
+        'resume': False    # Resume not yet supported
+    }
+)
 ```
 
 ## Detailed Reference
 
-### State Manager Interface
+### State Manager API
+
+The StateManager class provides the following interface for handlers:
+
+#### Initialization
+
+```python
+from function.state_manager import StateManager
+
+state_manager = StateManager(
+    context=context,                    # Required: OpenFaaS context
+    supported_states={                  # Optional: customize support
+        'stop': True,
+        'pause': False,
+        'resume': False
+    },
+    checkpoint_interval=60,             # Optional: seconds between checkpoints
+    signal_check_interval=5             # Optional: seconds between signal checks
+)
+
+# Initialize Redis connection and monitoring
+success = state_manager.initialize()
+```
 
 #### Checking for State Changes
 
@@ -80,7 +113,7 @@ if state_manager.should_stop():
     # Halt execution gracefully
     break
 
-# Check if pause was requested
+# Check if pause was requested (if supported)
 if state_manager.should_pause():
     # Save state and suspend
     break
@@ -89,6 +122,17 @@ if state_manager.should_pause():
 if state_manager.should_checkpoint():
     # Save current progress for resume
     state_manager.save_checkpoint({...})
+```
+
+#### Checking State
+
+```python
+# Get current state
+current = state_manager.get_current_state()  # Returns: 'running', 'stopping', 'stopped', etc.
+
+# Check if shutdown initiated
+if state_manager.is_shutdown():
+    break
 ```
 
 #### Saving Progress
@@ -262,14 +306,27 @@ curl -X POST https://localhost:3001/api/v1/scan-executions/{id}/stop \
 ## Example: CIFS Connector
 
 ```python
+from function.state_manager import StateManager
+
 def handle(event, context):
     """CIFS access scan handler"""
-    state_manager = context.state_manager
+    
+    # Initialize state manager for stop support
+    state_manager = StateManager(
+        context=context,
+        supported_states={'stop': True}
+    )
+    
+    # Enable Redis monitoring for stop signals
+    if not state_manager.initialize():
+        context.log.warning("State management unavailable, no stop capability")
+        state_manager = None
     
     try:
         # Main scanning loop
         for share in shares:
-            if state_manager.should_stop():
+            # Check for stop signal
+            if state_manager and state_manager.should_stop():
                 context.log.info("Stop requested, exiting scan")
                 break
             
@@ -277,7 +334,7 @@ def handle(event, context):
             scan_share(share)
             
             # Checkpoint progress every minute
-            if state_manager.should_checkpoint():
+            if state_manager and state_manager.should_checkpoint():
                 state_manager.save_checkpoint({
                     'shares_completed': completed_count,
                     'total_shares': len(shares),
@@ -285,12 +342,14 @@ def handle(event, context):
                 })
         
         # Shutdown with appropriate status
-        final_status = 'stopped' if state_manager.should_stop() else 'completed'
-        state_manager.shutdown(final_status)
+        if state_manager:
+            final_status = 'stopped' if state_manager.should_stop() else 'completed'
+            state_manager.shutdown(final_status)
         
     except Exception as e:
         context.log.error(f"Scan failed: {e}")
-        state_manager.shutdown('failed')
+        if state_manager:
+            state_manager.shutdown('failed')
         raise
     
     return context.access_scan_success_response()
@@ -345,12 +404,16 @@ def test_stop_during_scan():
 
 ## Troubleshooting
 
-### State Manager Not Initialized
+### State Manager Initialization Failed
 
 ```
-Issue: context.state_manager is None
-Reason: State manager only initializes for scan/sync operations
-Solution: Check that function_type is 'access-scan' or 'sync'
+Issue: state_manager.initialize() returns False
+Reason: Redis connection unavailable or not configured
+Solution:
+1. Verify REDIS_URL environment variable is set
+2. Ensure Redis service is running and accessible
+3. Check network connectivity to Redis host
+4. Handler should gracefully degrade when Redis unavailable
 ```
 
 ### Stop Signal Not Received
@@ -384,12 +447,21 @@ def handle(event, context):
 
 ### After (Framework):
 ```python
+from function.state_manager import StateManager
+
 def handle(event, context):
-    state_manager = context.state_manager
+    # Initialize state manager in your handler
+    state_manager = StateManager(context=context)
+    if not state_manager.initialize():
+        state_manager = None
+    
     while True:
-        if state_manager.should_stop():
+        if state_manager and state_manager.should_stop():
             break
         process_item()
+    
+    if state_manager:
+        state_manager.shutdown('completed')
 ```
 
 ## Future: Pause/Resume

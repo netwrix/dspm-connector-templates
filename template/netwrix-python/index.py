@@ -545,7 +545,7 @@ class Context:
 
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
-            
+
             # Log the update request details
             self.log.info(
                 f"Calling update_execution: type={execution_type}, id={execution_id}, status={status}, payload={payload}"
@@ -579,7 +579,7 @@ class Context:
             return False, error_msg
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            self.log.error(f"update_execution exception", error_msg=error_msg, error_type=type(e).__name__)
+            self.log.error("update_execution exception", error_msg=error_msg, error_type=type(e).__name__)
             return False, error_msg
 
 
@@ -763,7 +763,7 @@ def call_handler(path: str):
                         # Scan was stopped, make sure execution status is updated
                         context.update_execution(status="stopped", completed_at=completed_at)
                         context.log.info(
-                            f"Scan was stopped",
+                            "Scan was stopped",
                             function_type=context.function_type,
                             status="stopped",
                         )

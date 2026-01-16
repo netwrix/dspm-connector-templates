@@ -11,10 +11,8 @@ Tests cover:
 """
 
 import pytest
-import json
 import time
-from unittest.mock import Mock, MagicMock, patch, call
-from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 # Import the module to test
 from function.redis_signal_handler import (
@@ -333,7 +331,7 @@ class TestScanControlContext:
             '_id': '123-0'
         }
         
-        result = context.check_for_signals()
+        context.check_for_signals()
         
         assert context.pause_requested is False
     
