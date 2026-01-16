@@ -136,7 +136,6 @@ meter = get_meter(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
-from function.state_manager import StateManager  # noqa: E402
 
 
 class Event:
@@ -155,7 +154,6 @@ class Context:
         self.meter = meter
         self.log = ContextLogger(self)
         self.caller_attributes = caller_attributes
-        self.state_manager = None
 
 
 class ContextLogger:
@@ -279,16 +277,6 @@ def call_handler(path):
     )
 
     try:
-        # Initialize state management for stop/pause/resume operations
-        try:
-            context.state_manager = StateManager(
-                context=context,
-                supported_states={'stop': True}
-            )
-            context.state_manager.initialize()
-        except Exception as e:
-            context.log.warning("Failed to initialize state manager", error=str(e))
-        
         response_data = handler.handle(event, context)
         resp = format_response(response_data)
 
@@ -303,13 +291,6 @@ def call_handler(path):
             error_message=str(e),
         )
         raise
-    finally:
-        # Cleanup state manager resources
-        if context.state_manager:
-            try:
-                context.state_manager.close()
-            except Exception as e:
-                context.log.warning("Error closing state manager", error=str(e))
 
 
 def handle_shutdown(signum, frame):
