@@ -11,8 +11,7 @@ Tests cover:
 
 import pytest
 import time
-from unittest.mock import Mock, MagicMock, patch, call
-from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 from function.state_manager import StateManager
 
