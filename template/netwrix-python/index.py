@@ -145,7 +145,6 @@ logger = get_logger(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
-from function.state_manager import StateManager  # noqa: E402
 
 
 # BatchManager is used to manage the batching of objects for a specific table. It will
@@ -304,43 +303,8 @@ class Context:
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
         self.tables: dict[str, BatchManager] = {}
-        self.state_manager: StateManager | None = None
 
         self.log = ContextLogger(self)
-
-    def initialize_state_manager(self, supported_states: dict[str, bool] | None = None) -> bool:
-        """
-        Initialize state management for stop/pause/resume operations
-        
-        Args:
-            supported_states: Dict of {state: bool} for supported operations
-                - 'stop': True (default, halt execution)
-                - 'pause': False (default, not supported)
-                - 'resume': False (default, not supported)
-        
-        Returns:
-            True if state manager initialized successfully, False otherwise
-        """
-        try:
-            self.state_manager = StateManager(
-                context=self,
-                supported_states=supported_states or {'stop': True}
-            )
-            
-            # Initialize Redis signal monitoring
-            if self.state_manager.initialize():
-                self.log.info(
-                    "State manager initialized",
-                    supported_states=self.state_manager.get_supported_states()
-                )
-                return True
-            else:
-                self.log.warning("State manager initialization failed (Redis unavailable)")
-                return False
-                
-        except Exception as e:
-            self.log.error(f"Error initializing state manager: {e}")
-            return False
 
     def test_connection_success_response(self):
         return {"statusCode": 200, "body": {}}
@@ -626,30 +590,41 @@ class Context:
 
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+            
+            # Log the update request details
+            self.log.info(
+                f"Calling update_execution: type={execution_type}, id={execution_id}, status={status}, payload={payload}"
+            )
 
             if local_run:
+                url = f"http://{os.getenv('APP_UPDATE_EXECUTION_FUNCTION', 'app-update-execution')}:8080"
+                self.log.info(f"Sending update_execution to local URL: {url}")
                 response = requests.post(
-                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
+                    url,
                     json=payload,
                     headers=headers,
                     timeout=30,
                 )
             else:
+                # IMPORTANT: Use synchronous function call for execution updates to ensure they're processed immediately
+                url = f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION', 'app-update-execution')}"
+                self.log.info(f"Sending update_execution to OpenFaaS URL (SYNC): {url}")
                 response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION')}",
+                    url,
                     json=payload,
                     headers=headers,
                     timeout=30,
                 )
 
             if response.status_code in (202, 200):
+                self.log.info(f"update_execution succeeded: status_code={response.status_code}, response={response.text[:200] if response.text else ''}")
                 return True, None
             error_msg = f"Status {response.status_code}: {response.text}"
-            self.log.error(error_msg)
+            self.log.error(f"update_execution failed: {error_msg}")
             return False, error_msg
         except Exception as e:
             error_msg = f"Error: {str(e)}"
-            self.log.error(error_msg)
+            self.log.error(f"update_execution exception", error_msg=error_msg, error_type=type(e).__name__)
             return False, error_msg
 
 
@@ -815,9 +790,6 @@ def call_handler(path: str):
             if context.function_type == "access-scan" or context.function_type == "sync":
                 context.update_execution(status="running")
                 context.log.info("Started operation", function_type=context.function_type)
-                
-                # Initialize state management for stop/pause/resume operations
-                context.initialize_state_manager({'stop': True})
 
             with tracer.start_as_current_span("handle_request"):
                 response_data = handler.handle(event, context)
@@ -833,12 +805,24 @@ def call_handler(path: str):
                 if response_data["statusCode"] == 200:
                     response_data["body"]["startedAt"] = started_at
                     response_data["body"]["completedAt"] = completed_at
-                    context.update_execution(status="completed", completed_at=completed_at)
-                    context.log.info(
-                        f"Completed {context.function_type} operation successfully",
-                        function_type=context.function_type,
-                        status="completed",
-                    )
+                    # Check if handler already set a specific status (like 'stopped')
+                    # If not, default to 'completed'
+                    if response_data.get("body", {}).get("status") == "stopped":
+                        # Scan was stopped, make sure execution status is updated
+                        context.update_execution(status="stopped", completed_at=completed_at)
+                        context.log.info(
+                            f"Scan was stopped",
+                            function_type=context.function_type,
+                            status="stopped",
+                        )
+                    else:
+                        # Normal completion - update to completed
+                        context.update_execution(status="completed", completed_at=completed_at)
+                        context.log.info(
+                            f"Completed {context.function_type} operation successfully",
+                            function_type=context.function_type,
+                            status="completed",
+                        )
                 else:
                     context.update_execution(status="failed", completed_at=completed_at)
                     context.log.error(
@@ -857,10 +841,6 @@ def call_handler(path: str):
             span.set_attribute("http.status_code", status_code)
             span.set_status(StatusCode.OK)
             context.log.info("Request completed", http_status_code=status_code)
-            
-            # Cleanup state manager resources
-            if context.state_manager:
-                context.state_manager.close()
 
             return resp
         except Exception as e:

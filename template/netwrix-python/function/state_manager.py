@@ -118,7 +118,7 @@ class StateManager:
         """
         try:
             # Import here to avoid circular imports
-            from redis_signal_handler import RedisSignalHandler, ScanControlContext
+            from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
             
             # Get execution ID
             execution_id = self.context.sync_execution_id or self.context.scan_execution_id
@@ -139,7 +139,7 @@ class StateManager:
             # Update status
             self.redis_handler.update_status(execution_id, 'running')
             
-            logger.info("State manager initialized", supported_states=self.supported_states)
+            logger.info(f"State manager initialized (supported_states={self.supported_states})")
             return True
             
         except ImportError as e:
@@ -167,14 +167,24 @@ class StateManager:
 
         # Check for incoming signals
         try:
+            # Add a timeout to prevent indefinite blocking
             signal = self.control_context.check_for_signals()
             if signal and self.control_context.stop_requested:
                 with self._state_lock:
                     self.requested_state = 'stop'
-                self._trigger_state_change_callbacks('stopping')
+                    # Actually transition to stopping state
+                    if self.current_state == 'running':
+                        old_state = self.current_state
+                        self.current_state = 'stopping'
+                        logger.info(f"State transitioned (from_state={old_state}, to_state=stopping)")
                 return True
         except Exception as e:
             logger.warning(f"Error checking state changes: {e}")
+            # If Redis is unavailable, disable further checks to prevent hangs
+            if "timeout" in str(e).lower() or "connection" in str(e).lower():
+                logger.error("Redis appears to be unavailable, disabling state checks")
+                self.control_context = None
+                self.redis_handler = None
 
         return False
 
@@ -237,31 +247,12 @@ class StateManager:
             self.last_checkpoint = time.time()
             
             logger.debug(
-                "Checkpoint saved",
-                execution_id=execution_id,
-                checkpoint_id=checkpoint_id
+                f"Checkpoint saved (execution_id={execution_id}, checkpoint_id={checkpoint_id})"
             )
             return checkpoint_id
             
         except Exception as e:
             logger.warning(f"Failed to save checkpoint: {e}")
-            return None
-
-    def get_last_checkpoint(self) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve the last saved checkpoint
-        
-        Returns:
-            Checkpoint data if available, None otherwise
-        """
-        if not self.redis_handler:
-            return None
-
-        try:
-            execution_id = self.context.sync_execution_id or self.context.scan_execution_id
-            return self.redis_handler.get_last_checkpoint(execution_id)
-        except Exception as e:
-            logger.warning(f"Failed to get checkpoint: {e}")
             return None
 
     def set_state(self, new_state: str) -> bool:
@@ -279,9 +270,7 @@ class StateManager:
             
             if new_state not in valid_transitions:
                 logger.warning(
-                    f"Invalid state transition",
-                    from_state=self.current_state,
-                    to_state=new_state
+                    f"Invalid state transition (from_state={self.current_state}, to_state={new_state})"
                 )
                 return False
             
@@ -289,9 +278,7 @@ class StateManager:
             self.current_state = new_state
             
             logger.info(
-                "State transitioned",
-                from_state=old_state,
-                to_state=new_state
+                f"State transitioned (from_state={old_state}, to_state={new_state})"
             )
             
         # Call callbacks outside lock to avoid deadlocks

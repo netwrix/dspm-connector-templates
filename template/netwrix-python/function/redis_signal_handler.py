@@ -8,11 +8,55 @@ import redis
 import json
 import os
 import time
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class TimeoutError(Exception):
+    """Custom timeout exception"""
+    pass
+
+
+def run_with_timeout(func, args=(), kwargs=None, timeout=5):
+    """
+    Run a function with a timeout using threading
+    
+    Args:
+        func: Function to execute
+        args: Function arguments
+        kwargs: Function keyword arguments
+        timeout: Timeout in seconds (default 5)
+    
+    Returns:
+        Function result or raises TimeoutError
+    """
+    kwargs = kwargs or {}
+    result = [TimeoutError(f"Operation timed out after {timeout} seconds")]
+    
+    def target():
+        try:
+            result[0] = func(*args, **kwargs)
+        except Exception as e:
+            result[0] = e
+    
+    thread = threading.Thread(target=target)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout)
+    
+    if thread.is_alive():
+        # Thread is still running, timeout occurred
+        raise TimeoutError(f"Operation timed out after {timeout} seconds")
+    
+    if isinstance(result[0], Exception):
+        raise result[0]
+    
+    return result[0]
 
 
 class RedisSignalHandler:
@@ -41,13 +85,21 @@ class RedisSignalHandler:
             True if connection successful, False otherwise
         """
         try:
-            self.client = redis.from_url(self.redis_url, decode_responses=True)
+            # Add socket timeout to prevent hangs
+            # Note: socket_keepalive_options removed as it causes "Invalid argument" errors on some platforms
+            self.client = redis.from_url(
+                self.redis_url,
+                decode_responses=True,
+                socket_connect_timeout=2,  # 2 second connection timeout
+                socket_timeout=2,  # 2 second read/write timeout
+                socket_keepalive=True  # Enable keepalive without custom options
+            )
             self.client.ping()
             self.connected = True
-            logger.info("Connected to Redis for signal handling", redis_url=self.redis_url)
+            logger.info(f"Connected to Redis for signal handling (redis_url={self.redis_url})")
             return True
         except Exception as e:
-            logger.error("Failed to connect to Redis", error=str(e), redis_url=self.redis_url)
+            logger.error(f"Failed to connect to Redis: {str(e)} (redis_url={self.redis_url})")
             self.connected = False
             return False
 
@@ -72,12 +124,20 @@ class RedisSignalHandler:
         try:
             control_stream_key = f"scan:control:{execution_id}"
             
-            # Non-blocking read: read latest message after last_message_id
-            messages = self.client.xread(
-                {control_stream_key: last_message_id},
-                count=1,
-                block=0  # Non-blocking
-            )
+            # Wrap Redis operation with timeout to prevent hangs
+            try:
+                # Non-blocking read: read latest message after last_message_id
+                messages = run_with_timeout(
+                    self.client.xread,
+                    args=({control_stream_key: last_message_id},),
+                    kwargs={'count': 1, 'block': 0},
+                    timeout=3
+                )
+            except TimeoutError:
+                logger.warning(f"Redis xread timed out (execution_id={execution_id})")
+                # Mark connection as broken so it will reconnect next time
+                self.connected = False
+                return None
 
             if not messages or len(messages) == 0:
                 return None
@@ -93,20 +153,24 @@ class RedisSignalHandler:
             data['_id'] = message_id
             
             logger.info(
-                "Control signal received",
-                execution_id=execution_id,
-                action=data.get('action'),
-                message_id=message_id
+                f"Control signal received (execution_id={execution_id}, action={data.get('action')}, message_id={message_id})"
             )
             
             return data
 
         except Exception as e:
-            logger.warning(
-                "Error reading control signal",
-                execution_id=execution_id,
-                error=str(e)
-            )
+            # Log timeout errors at debug level since they're expected behavior
+            if "timeout" in str(e).lower():
+                logger.debug(
+                    f"Redis operation timed out (execution_id={execution_id}, error={str(e)})"
+                )
+            else:
+                logger.warning(
+                    f"Error reading control signal (execution_id={execution_id}, error={str(e)})"
+                )
+            # If there's an error, mark connection as broken
+            if "Connection" in str(e) or "Redis" in str(e) or "timeout" in str(e).lower():
+                self.connected = False
             return None
 
     def save_checkpoint(
@@ -151,22 +215,17 @@ class RedisSignalHandler:
             self.client.expire(checkpoint_stream_key, self.CONTROL_STREAM_TTL)
             
             # Trim to keep only last 10 checkpoints
-            self.client.xtrim(checkpoint_stream_key, 'MAXLEN', '~', 10)
+            self.client.xtrim(checkpoint_stream_key, maxlen=10, approximate=True)
             
             logger.debug(
-                "Checkpoint saved",
-                execution_id=execution_id,
-                message_id=message_id,
-                objects_count=checkpoint_data.get('objects_count')
+                f"Checkpoint saved (execution_id={execution_id}, message_id={message_id}, objects_count={checkpoint_data.get('objects_count')})"
             )
             
             return message_id
 
         except Exception as e:
             logger.warning(
-                "Failed to save checkpoint",
-                execution_id=execution_id,
-                error=str(e)
+                f"Failed to save checkpoint (execution_id={execution_id}, error={str(e)})"
             )
             return None
 
@@ -208,22 +267,17 @@ class RedisSignalHandler:
             self.client.expire(status_stream_key, self.CONTROL_STREAM_TTL)
             
             # Trim to keep only last 100 status updates
-            self.client.xtrim(status_stream_key, 'MAXLEN', '~', 100)
+            self.client.xtrim(status_stream_key, maxlen=100, approximate=True)
             
             logger.info(
-                "Status updated",
-                execution_id=execution_id,
-                status=status
+                f"Status updated (execution_id={execution_id}, status={status})"
             )
             
             return message_id
 
         except Exception as e:
             logger.warning(
-                "Failed to update status",
-                execution_id=execution_id,
-                status=status,
-                error=str(e)
+                f"Failed to update status (execution_id={execution_id}, status={status}, error={str(e)})"
             )
             return None
 
@@ -251,18 +305,14 @@ class RedisSignalHandler:
             deleted = self.client.delete(*keys_to_delete)
             
             logger.info(
-                "Streams cleaned up",
-                execution_id=execution_id,
-                keys_deleted=deleted
+                f"Streams cleaned up (execution_id={execution_id}, keys_deleted={deleted})"
             )
             
             return deleted > 0
 
         except Exception as e:
             logger.warning(
-                "Failed to cleanup streams",
-                execution_id=execution_id,
-                error=str(e)
+                f"Failed to cleanup streams (execution_id={execution_id}, error={str(e)})"
             )
             return False
 
@@ -277,10 +327,14 @@ class RedisSignalHandler:
             return self._connect()
 
         try:
-            self.client.ping()
+            # Add timeout to ping operation
+            run_with_timeout(
+                self.client.ping,
+                timeout=2
+            )
             return True
-        except Exception as e:
-            logger.warning("Redis health check failed", error=str(e))
+        except (TimeoutError, Exception) as e:
+            logger.warning(f"Redis health check failed: {str(e)}")
             self.connected = False
             return False
 
@@ -291,7 +345,7 @@ class RedisSignalHandler:
                 self.client.close()
                 logger.info("Redis connection closed")
             except Exception as e:
-                logger.warning("Error closing Redis connection", error=str(e))
+                logger.warning(f"Error closing Redis connection: {str(e)}")
             finally:
                 self.client = None
                 self.connected = False
@@ -345,14 +399,14 @@ class ScanControlContext:
             
             if action == 'STOP':
                 self.stop_requested = True
-                logger.info("Stop signal received", execution_id=self.execution_id)
+                logger.info(f"Stop signal received (execution_id={self.execution_id})")
                 return True
             elif action == 'PAUSE':
                 self.pause_requested = True
-                logger.info("Pause signal received", execution_id=self.execution_id)
+                logger.info(f"Pause signal received (execution_id={self.execution_id})")
             elif action == 'RESUME':
                 self.pause_requested = False
-                logger.info("Resume signal received", execution_id=self.execution_id)
+                logger.info(f"Resume signal received (execution_id={self.execution_id})")
         
         return self.stop_requested
 
