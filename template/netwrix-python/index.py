@@ -166,19 +166,40 @@ class BatchManager:
                 # Add appropriate IDs and timestamp based on operation type (scan vs sync)
                 current_time = datetime.now(UTC).isoformat()
                 object_data = orjson.dumps(obj)[1:]  # Remove the first brace
-                enhanced_object = (
-                    b"{"
-                    + b'"scan_id":"'
-                    + self.context.scan_id.encode("utf-8")
-                    + b'",'
-                    + b'"scan_execution_id":"'
-                    + self.context.scan_execution_id.encode("utf-8")
-                    + b'",'
-                    + b'"scanned_at":"'
-                    + current_time.encode("utf-8")
-                    + b'",'
-                    + object_data  # The last brace is already included in the object_data
-                )
+
+                # Check if this is a sync operation
+                is_sync_operation = self.context.function_type == "sync"
+
+                if is_sync_operation:
+                    # For sync operations - use ClickHouse DateTime format
+                    enhanced_object = (
+                        b"{"
+                        + b'"sync_id":"'
+                        + self.context.sync_id.encode("utf-8")
+                        + b'",'
+                        + b'"sync_execution_id":"'
+                        + self.context.sync_execution_id.encode("utf-8")
+                        + b'",'
+                        + b'"synced_at":"'
+                        + current_time.encode("utf-8")
+                        + b'",'
+                        + object_data  # The last brace is already included in the object_data
+                    )
+                else:
+                    # For scan operations
+                    enhanced_object = (
+                        b"{"
+                        + b'"scan_id":"'
+                        + self.context.scan_id.encode("utf-8")
+                        + b'",'
+                        + b'"scan_execution_id":"'
+                        + self.context.scan_execution_id.encode("utf-8")
+                        + b'",'
+                        + b'"scanned_at":"'
+                        + current_time.encode("utf-8")
+                        + b'",'
+                        + object_data  # The last brace is already included in the object_data
+                    )
                 size = len(enhanced_object)
 
                 # Set the max size to 500 KB to accommodate for the
@@ -276,7 +297,9 @@ class Context:
     def __init__(self):
         self.secrets: dict[str, str] | None = None
         self.scan_id: str | None = os.getenv("SCAN_ID")
+        self.sync_id: str | None = os.getenv("SYNC_ID")
         self.scan_execution_id: str | None = None
+        self.sync_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
         self.tables: dict[str, BatchManager] = {}
@@ -309,7 +332,16 @@ class Context:
         Build headers dict with caller context information to pass to common functions.
         Only includes headers that have non-None values.
         """
-        return {"Scan-Id": self.scan_id, "Scan-Execution-Id": self.scan_execution_id}
+        headers = {}
+        if self.scan_id:
+            headers["Scan-Id"] = self.scan_id
+        if self.scan_execution_id:
+            headers["Scan-Execution-Id"] = self.scan_execution_id
+        if self.sync_id:
+            headers["Sync-Id"] = self.sync_id
+        if self.sync_execution_id:
+            headers["Sync-Execution-Id"] = self.sync_execution_id
+        return headers
 
     def get_connector_state(self) -> dict:
         """
@@ -322,7 +354,9 @@ class Context:
             ValueError: If scan_id is not set
             Exception: If the request fails
         """
-        if not self.scan_id:
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
+
+        if not scan_id:
             raise ValueError("scan_id must be set to retrieve connector state")
 
         local_run = self.run_local == "true"
@@ -334,14 +368,14 @@ class Context:
             if local_run:
                 response = requests.get(
                     f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
-                    params={"scanId": self.scan_id},
+                    params={"scanId": scan_id},
                     headers=headers,
                     timeout=30,
                 )
             else:
                 response = requests.get(
                     f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
-                    params={"scanId": self.scan_id},
+                    params={"scanId": scan_id},
                     headers=headers,
                     timeout=30,
                 )
@@ -372,15 +406,16 @@ class Context:
         Raises:
             ValueError: If scan_id is not set
         """
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
 
-        if not self.scan_id:
+        if not scan_id:
             raise ValueError("scan_id must be set to delete connector state")
 
         local_run = self.run_local == "true"
 
         try:
             # Build params with scanId and optional name parameters
-            params = {"scanId": self.scan_id}
+            params = {"scanId": scan_id}
             if names:
                 # Add multiple name parameters to the query string
                 params["name"] = names
@@ -434,7 +469,9 @@ class Context:
         Raises:
             ValueError: If scan_id is not set or data is not a dictionary
         """
-        if not self.scan_id:
+        scan_id = self.sync_id if self.function_type == "sync" else self.scan_id
+
+        if not scan_id:
             raise ValueError("scan_id must be set to save connector state")
 
         if not isinstance(data, dict):
@@ -443,7 +480,7 @@ class Context:
         local_run = self.run_local == "true"
 
         try:
-            payload = {"scanId": self.scan_id, "data": data}
+            payload = {"scanId": scan_id, "data": data}
 
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
@@ -520,9 +557,17 @@ class Context:
         completed_at=None,
     ):
         local_run = self.run_local == "true"
+
+        if self.function_type == "sync":
+            execution_id = self.sync_execution_id
+            execution_type = "sync"
+        else:
+            execution_id = self.scan_execution_id
+            execution_type = "scan"
+
         try:
             # Build payload with only provided arguments
-            payload = {"executionId": self.scan_execution_id}
+            payload = {"type": execution_type, "executionId": execution_id}
 
             # Only include optional fields if they are provided (not None)
             if status is not None:
@@ -612,6 +657,8 @@ class ContextLogger:
             "span_id": format(span_context.span_id, "016x") if span_context.is_valid else None,
             "scan_id": self.context.scan_id,
             "scan_execution_id": self.context.scan_execution_id,
+            "sync_id": self.context.sync_id,
+            "sync_execution_id": self.context.sync_execution_id,
             "function_type": self.context.function_type,
             **attributes,
         }
@@ -728,6 +775,7 @@ def call_handler(path: str):
 
             request_data = json.loads(event.body)
             context.scan_execution_id = request_data.get("scanExecutionId")
+            context.sync_execution_id = request_data.get("syncExecutionId")
 
             if not context.secrets:
                 context.log.warning("No secrets loaded from secret files")
