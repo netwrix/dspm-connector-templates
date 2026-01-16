@@ -617,7 +617,9 @@ class Context:
                 )
 
             if response.status_code in (202, 200):
-                self.log.info(f"update_execution succeeded: status_code={response.status_code}, response={response.text[:200] if response.text else ''}")
+                self.log.info(
+                    f"update_execution succeeded: status_code={response.status_code}, response={response.text[:200] if response.text else ''}"
+                )
                 return True, None
             error_msg = f"Status {response.status_code}: {response.text}"
             self.log.error(f"update_execution failed: {error_msg}")

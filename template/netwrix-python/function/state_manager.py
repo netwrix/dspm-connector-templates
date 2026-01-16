@@ -18,16 +18,16 @@ Usage:
                     'resume': False    # This connector doesn't support resuming
                 }
             )
-            
+
         def handle(self, event, context):
             # Initialize state monitoring
             self.state_manager.initialize()
-            
+
             # In main loop:
             if self.state_manager.should_stop():
                 self.state_manager.shutdown()
                 return result
-            
+
             # Periodically save progress:
             if self.state_manager.should_checkpoint():
                 self.state_manager.save_checkpoint({
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 class StateManager:
     """
     Manages connector execution states (stop/pause/resume).
-    
+
     Provides a unified interface for all connectors to:
     - Declare supported states
     - Respond to state change requests
@@ -62,21 +62,21 @@ class StateManager:
 
     # Valid state transitions
     VALID_TRANSITIONS = {
-        'running': ['stopping', 'pausing', 'completed', 'failed', 'stopped'],
-        'stopping': ['stopped', 'failed'],
-        'stopped': [],
-        'pausing': ['paused', 'failed'],
-        'paused': ['resuming', 'failed'],
-        'resuming': ['running', 'failed'],
-        'completed': [],
-        'failed': []
+        "running": ["stopping", "pausing", "completed", "failed", "stopped"],
+        "stopping": ["stopped", "failed"],
+        "stopped": [],
+        "pausing": ["paused", "failed"],
+        "paused": ["resuming", "failed"],
+        "resuming": ["running", "failed"],
+        "completed": [],
+        "failed": [],
     }
 
     # Default supported states (all connectors can support stop)
     DEFAULT_SUPPORTED_STATES = {
-        'stop': True,      # Halt execution
-        'pause': False,    # Suspend and save state
-        'resume': False    # Continue from pause
+        "stop": True,  # Halt execution
+        "pause": False,  # Suspend and save state
+        "resume": False,  # Continue from pause
     }
 
     def __init__(
@@ -84,11 +84,11 @@ class StateManager:
         context,
         supported_states: Optional[Dict[str, bool]] = None,
         checkpoint_interval: int = 60,
-        signal_check_interval: int = 5
+        signal_check_interval: int = 5,
     ):
         """
         Initialize state manager
-        
+
         Args:
             context: OpenFaaS context object
             supported_states: Dict of {state: bool} indicating support
@@ -96,14 +96,11 @@ class StateManager:
             signal_check_interval: Seconds between signal checks (default 5)
         """
         self.context = context
-        self.supported_states = {
-            **self.DEFAULT_SUPPORTED_STATES,
-            **(supported_states or {})
-        }
+        self.supported_states = {**self.DEFAULT_SUPPORTED_STATES, **(supported_states or {})}
         self.checkpoint_interval = checkpoint_interval
         self.signal_check_interval = signal_check_interval
-        
-        self.current_state = 'running'
+
+        self.current_state = "running"
         self.requested_state = None
         self.redis_handler = None
         self.control_context = None
@@ -116,7 +113,7 @@ class StateManager:
     def initialize(self) -> bool:
         """
         Initialize Redis signal monitoring
-        
+
         Returns:
             True if initialization successful, False otherwise
         """
@@ -126,23 +123,23 @@ class StateManager:
             if not execution_id:
                 logger.warning("No execution ID available, signal monitoring disabled")
                 return False
-            
+
             # Initialize Redis handler
             self.redis_handler = RedisSignalHandler()
-            
+
             if not self.redis_handler.health_check():
                 logger.warning("Redis unavailable, signal monitoring disabled")
                 return False
-            
+
             # Create control context
             self.control_context = ScanControlContext(execution_id, self.redis_handler)
-            
+
             # Update status
-            self.redis_handler.update_status(execution_id, 'running')
-            
+            self.redis_handler.update_status(execution_id, "running")
+
             logger.info(f"State manager initialized (supported_states={self.supported_states})")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize state manager: {e}")
             return False
@@ -150,7 +147,7 @@ class StateManager:
     def check_for_state_changes(self) -> bool:
         """
         Check for state change requests from Redis
-        
+
         Returns:
             True if stop was requested, False otherwise
         """
@@ -169,11 +166,11 @@ class StateManager:
             signal = self.control_context.check_for_signals()
             if signal and self.control_context.stop_requested:
                 with self._state_lock:
-                    self.requested_state = 'stop'
+                    self.requested_state = "stop"
                     # Actually transition to stopping state
-                    if self.current_state == 'running':
+                    if self.current_state == "running":
                         old_state = self.current_state
-                        self.current_state = 'stopping'
+                        self.current_state = "stopping"
                         logger.info(f"State transitioned (from_state={old_state}, to_state=stopping)")
                 return True
         except Exception as e:
@@ -189,32 +186,32 @@ class StateManager:
     def should_stop(self) -> bool:
         """
         Check if execution should stop
-        
+
         Returns:
             True if stop was requested, False otherwise
         """
         self.check_for_state_changes()
         with self._state_lock:
-            return self.requested_state == 'stop'
+            return self.requested_state == "stop"
 
     def should_pause(self) -> bool:
         """
         Check if execution should pause
-        
+
         Returns:
             True if pause was requested and supported, False otherwise
         """
-        if not self.supported_states.get('pause', False):
+        if not self.supported_states.get("pause", False):
             return False
-        
+
         self.check_for_state_changes()
         with self._state_lock:
-            return self.requested_state == 'pause' and self.control_context.pause_requested
+            return self.requested_state == "pause" and self.control_context.pause_requested
 
     def should_checkpoint(self) -> bool:
         """
         Check if it's time to save a checkpoint
-        
+
         Returns:
             True if checkpoint interval has elapsed, False otherwise
         """
@@ -226,13 +223,13 @@ class StateManager:
     def save_checkpoint(self, checkpoint_data: Dict[str, Any]) -> Optional[str]:
         """
         Save execution progress checkpoint
-        
+
         Args:
             checkpoint_data: Dictionary with checkpoint information
                 - progress: current progress data
                 - timestamp: ISO8601 timestamp
                 - additional fields as needed
-        
+
         Returns:
             Checkpoint ID if successful, None otherwise
         """
@@ -243,12 +240,10 @@ class StateManager:
             execution_id = self.context.sync_execution_id or self.context.scan_execution_id
             checkpoint_id = self.redis_handler.save_checkpoint(execution_id, checkpoint_data)
             self.last_checkpoint = time.time()
-            
-            logger.debug(
-                f"Checkpoint saved (execution_id={execution_id}, checkpoint_id={checkpoint_id})"
-            )
+
+            logger.debug(f"Checkpoint saved (execution_id={execution_id}, checkpoint_id={checkpoint_id})")
             return checkpoint_id
-            
+
         except Exception as e:
             logger.warning(f"Failed to save checkpoint: {e}")
             return None
@@ -256,29 +251,25 @@ class StateManager:
     def set_state(self, new_state: str) -> bool:
         """
         Transition to a new state
-        
+
         Args:
             new_state: Target state name
-        
+
         Returns:
             True if transition is valid and successful, False otherwise
         """
         with self._state_lock:
             valid_transitions = self.VALID_TRANSITIONS.get(self.current_state, [])
-            
+
             if new_state not in valid_transitions:
-                logger.warning(
-                    f"Invalid state transition (from_state={self.current_state}, to_state={new_state})"
-                )
+                logger.warning(f"Invalid state transition (from_state={self.current_state}, to_state={new_state})")
                 return False
-            
+
             old_state = self.current_state
             self.current_state = new_state
-            
-            logger.info(
-                f"State transitioned (from_state={old_state}, to_state={new_state})"
-            )
-            
+
+            logger.info(f"State transitioned (from_state={old_state}, to_state={new_state})")
+
         # Call callbacks outside lock to avoid deadlocks
         self._trigger_state_change_callbacks(new_state)
         return True
@@ -286,7 +277,7 @@ class StateManager:
     def on_state_change(self, callback: Callable[[str, str], None]) -> None:
         """
         Register callback for state change events
-        
+
         Args:
             callback: Function(old_state, new_state) to call on state changes
         """
@@ -300,13 +291,13 @@ class StateManager:
             except Exception as e:
                 logger.error(f"Error in state change callback: {e}")
 
-    def shutdown(self, final_status: str = 'stopped') -> bool:
+    def shutdown(self, final_status: str = "stopped") -> bool:
         """
         Gracefully shut down and transition to final state
-        
+
         Args:
             final_status: Final state ('stopped', 'completed', 'failed')
-        
+
         Returns:
             True if shutdown successful, False otherwise
         """
@@ -315,24 +306,21 @@ class StateManager:
             if not self.set_state(final_status):
                 logger.warning(f"Could not transition to {final_status}")
                 return False
-            
+
             # Update Redis status
             if self.redis_handler:
                 execution_id = self.context.sync_execution_id or self.context.scan_execution_id
                 self.redis_handler.update_status(
-                    execution_id,
-                    final_status,
-                    'Execution stopped',
-                    {'partial_data': final_status == 'stopped'}
+                    execution_id, final_status, "Execution stopped", {"partial_data": final_status == "stopped"}
                 )
-                
+
                 # Cleanup streams
                 self.redis_handler.cleanup_streams(execution_id)
-            
+
             self._shutdown_event.set()
             logger.info(f"State manager shutdown with final status: {final_status}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
             return False
