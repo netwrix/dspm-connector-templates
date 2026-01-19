@@ -168,6 +168,63 @@ class TestStateTransitions:
         manager.current_state = "stopping"
         assert manager.get_current_state() == "stopping"
 
+    def test_callback_receives_different_old_and_new_states(self, manager):
+        """Test that callback receives distinct old_state and new_state values
+
+        This is a regression test for a bug where _trigger_state_change_callbacks
+        was called with self.current_state and new_state being the same value
+        because the state was already updated before calling the callbacks.
+        """
+        callback = MagicMock()
+        manager.on_state_change(callback)
+        manager.current_state = "running"
+
+        # Transition from 'running' to 'stopping'
+        manager.set_state("stopping")
+
+        # Callback should be called with (old_state='running', new_state='stopping')
+        # NOT (old_state='stopping', new_state='stopping')
+        callback.assert_called_once()
+        args = callback.call_args[0]
+        old_state, new_state = args
+
+        assert old_state == "running", f"Expected old_state='running' but got '{old_state}'"
+        assert new_state == "stopping", f"Expected new_state='stopping' but got '{new_state}'"
+        assert old_state != new_state, "old_state and new_state should be different"
+
+    def test_multiple_transitions_have_correct_old_states(self, manager):
+        """Test that multiple state transitions pass correct old states to callbacks"""
+        callback = MagicMock()
+        manager.on_state_change(callback)
+        manager.current_state = "running"
+
+        # First transition: running -> stopping
+        manager.set_state("stopping")
+        first_call_args = callback.call_args_list[0][0]
+        assert first_call_args[0] == "running"
+        assert first_call_args[1] == "stopping"
+
+        # Second transition: stopping -> stopped
+        callback.reset_mock()
+        manager.set_state("stopped")
+        second_call_args = callback.call_args_list[0][0]
+        assert second_call_args[0] == "stopping"
+        assert second_call_args[1] == "stopped"
+
+    def test_callback_receives_distinct_states_in_running_to_completed_transition(self, manager):
+        """Test callback with running -> completed transition"""
+        callback = MagicMock()
+        manager.on_state_change(callback)
+        manager.current_state = "running"
+
+        manager.set_state("completed")
+
+        callback.assert_called_once()
+        old_state, new_state = callback.call_args[0]
+        assert old_state == "running"
+        assert new_state == "completed"
+        assert old_state != new_state
+
 
 class TestSignalChecking:
     """Test signal checking functionality"""
@@ -241,9 +298,6 @@ class TestSignalChecking:
         result = manager.check_for_state_changes()
 
         assert result is False
-        # Context should be disabled
-        assert manager.control_context is None
-        assert manager.redis_handler is None
 
 
 class TestCheckpointManagement:

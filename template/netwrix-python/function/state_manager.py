@@ -162,24 +162,18 @@ class StateManager:
 
         # Check for incoming signals
         try:
-            # Add a timeout to prevent indefinite blocking
+            # Socket timeout is configured on Redis client prevent indefinite blocking if it becomes unresponsive.
             signal = self.control_context.check_for_signals()
             if signal and self.control_context.stop_requested:
-                with self._state_lock:
-                    self.requested_state = "stop"
-                    # Actually transition to stopping state
-                    if self.current_state == "running":
-                        old_state = self.current_state
-                        self.current_state = "stopping"
-                        logger.info(f"State transitioned (from_state={old_state}, to_state=stopping)")
+                self.requested_state = "stop"
+                # Actually transition to stopping state
+                if self.current_state == "running":
+                    if self.set_state("stopping"):
+                        logger.info("State transitioned (from_state=running, to_state=stopping)")
                 return True
         except Exception as e:
+            # just return and allow subsequent calls, in case the issue is transient
             logger.warning(f"Error checking state changes: {e}")
-            # If Redis is unavailable, disable further checks to prevent hangs
-            if "timeout" in str(e).lower() or "connection" in str(e).lower():
-                logger.error("Redis appears to be unavailable, disabling state checks")
-                self.control_context = None
-                self.redis_handler = None
 
         return False
 
@@ -206,7 +200,11 @@ class StateManager:
 
         self.check_for_state_changes()
         with self._state_lock:
-            return self.requested_state == "pause" and self.control_context.pause_requested
+            return (
+                self.requested_state == "pause"
+                and self.control_context is not None
+                and self.control_context.pause_requested
+            )
 
     def should_checkpoint(self) -> bool:
         """
@@ -271,7 +269,7 @@ class StateManager:
             logger.info(f"State transitioned (from_state={old_state}, to_state={new_state})")
 
         # Call callbacks outside lock to avoid deadlocks
-        self._trigger_state_change_callbacks(new_state)
+        self._trigger_state_change_callbacks(old_state, new_state)
         return True
 
     def on_state_change(self, callback: Callable[[str, str], None]) -> None:
@@ -283,11 +281,11 @@ class StateManager:
         """
         self._on_state_change_callbacks.append(callback)
 
-    def _trigger_state_change_callbacks(self, new_state: str):
+    def _trigger_state_change_callbacks(self, old_state: str, new_state: str):
         """Trigger all registered callbacks for state change"""
         for callback in self._on_state_change_callbacks:
             try:
-                callback(self.current_state, new_state)
+                callback(old_state, new_state)
             except Exception as e:
                 logger.error(f"Error in state change callback: {e}")
 
