@@ -166,7 +166,7 @@ class BatchManager:
                 # Add appropriate IDs and timestamp based on operation type (scan vs sync)
                 current_time = datetime.now(UTC).isoformat()
                 object_data = orjson.dumps(obj)[1:]  # Remove the first brace
-                
+
                 # For scan operations
                 enhanced_object = (
                     b"{"
@@ -550,7 +550,7 @@ class Context:
 
             # Log the update request details
             self.log.info(
-                f"Calling update_execution: type={execution_type}, id={execution_id}, status={status}, payload={payload}"
+                f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}"
             )
 
             if local_run:
