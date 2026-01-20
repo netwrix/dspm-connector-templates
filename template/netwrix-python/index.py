@@ -549,9 +549,7 @@ class Context:
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
             # Log the update request details
-            self.log.info(
-                f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}"
-            )
+            self.log.info(f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}")
 
             if local_run:
                 url = f"http://{os.getenv('APP_UPDATE_EXECUTION_FUNCTION', 'app-update-execution')}:8080"
