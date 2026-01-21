@@ -156,7 +156,6 @@ class StateManager:
 
         current_time = time.time()
         if current_time - self.last_signal_check < self.signal_check_interval:
-            logger.info("check_for_state_changes: too soon")
             return False  # Not time to check yet
 
         self.last_signal_check = current_time
