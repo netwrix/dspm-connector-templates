@@ -119,7 +119,7 @@ class StateManager:
         """
         try:
             # Get execution ID
-            execution_id = self.context.sync_execution_id or self.context.scan_execution_id
+            execution_id = self.context.scan_execution_id
             if not execution_id:
                 logger.warning("No execution ID available, signal monitoring disabled")
                 return False
@@ -156,6 +156,7 @@ class StateManager:
 
         current_time = time.time()
         if current_time - self.last_signal_check < self.signal_check_interval:
+            logger.info("check_for_state_changes: too soon")
             return False  # Not time to check yet
 
         self.last_signal_check = current_time
@@ -236,7 +237,7 @@ class StateManager:
             return None
 
         try:
-            execution_id = self.context.sync_execution_id or self.context.scan_execution_id
+            execution_id = self.context.scan_execution_id
             checkpoint_id = self.redis_handler.save_checkpoint(execution_id, checkpoint_data)
             self.last_checkpoint = time.time()
 
@@ -308,7 +309,7 @@ class StateManager:
 
             # Update Redis status
             if self.redis_handler:
-                execution_id = self.context.sync_execution_id or self.context.scan_execution_id
+                execution_id = self.context.scan_execution_id
                 self.redis_handler.update_status(
                     execution_id, final_status, "Execution stopped", {"partial_data": final_status == "stopped"}
                 )
