@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
 
 
-
 class TestRedisSignalHandler:
     """Test RedisSignalHandler class"""
 
@@ -77,7 +76,6 @@ class TestRedisSignalHandler:
         signal = handler.check_control_signal("exec-123", "0")
 
         assert signal is None
-
 
     def test_save_checkpoint_success(self, handler, mock_redis_client):
         """Test successful checkpoint saving"""
@@ -146,7 +144,6 @@ class TestRedisSignalHandler:
         result = handler.cleanup_streams("exec-123")
 
         assert result is False
-
 
     def test_close(self, handler, mock_redis_client):
         """Test closing Redis connection"""
@@ -292,362 +289,368 @@ class TestScanControlContext:
         assert context.should_pause() is True
 
 
-
 class TestStreamTrimming:
-     """Test stream trimming functionality"""
+    """Test stream trimming functionality"""
 
-     def test_checkpoint_stream_trim(self):
-         """Test checkpoint stream is trimmed to max 10 items"""
-         mock_client = MagicMock()
+    def test_checkpoint_stream_trim(self):
+        """Test checkpoint stream is trimmed to max 10 items"""
+        mock_client = MagicMock()
 
-         with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-             mock_from_url.return_value = mock_client
-             handler = RedisSignalHandler("redis://localhost:6379")
-             handler.client = mock_client
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
 
-             handler.save_checkpoint("exec-123", {})
+            handler.save_checkpoint("exec-123", {})
 
-             # Verify xtrim was called with correct parameters
-             xtrim_calls = mock_client.xtrim.call_args_list
-             assert len(xtrim_calls) > 0
-             call_args = xtrim_calls[0]
-             assert call_args[0][0] == "scan:checkpoint:exec-123"
-             assert call_args[1].get("maxlen") == 10
-             assert call_args[1].get("approximate") is True
+            # Verify xtrim was called with correct parameters
+            xtrim_calls = mock_client.xtrim.call_args_list
+            assert len(xtrim_calls) > 0
+            call_args = xtrim_calls[0]
+            assert call_args[0][0] == "scan:checkpoint:exec-123"
+            assert call_args[1].get("maxlen") == 10
+            assert call_args[1].get("approximate") is True
 
-     def test_status_stream_trim(self):
-         """Test status stream is trimmed to max 100 items"""
-         mock_client = MagicMock()
+    def test_status_stream_trim(self):
+        """Test status stream is trimmed to max 100 items"""
+        mock_client = MagicMock()
 
-         with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-             mock_from_url.return_value = mock_client
-             handler = RedisSignalHandler("redis://localhost:6379")
-             handler.client = mock_client
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
 
-             handler.update_status("exec-123", "running")
+            handler.update_status("exec-123", "running")
 
-             xtrim_calls = mock_client.xtrim.call_args_list
-             assert len(xtrim_calls) > 0
-             call_args = xtrim_calls[0]
-             assert call_args[0][0] == "scan:status:exec-123"
-             assert call_args[1].get("maxlen") == 100
+            xtrim_calls = mock_client.xtrim.call_args_list
+            assert len(xtrim_calls) > 0
+            call_args = xtrim_calls[0]
+            assert call_args[0][0] == "scan:status:exec-123"
+            assert call_args[1].get("maxlen") == 100
 
 
 class TestCheckpointLogic:
-     """Test checkpoint saving logic in detail"""
+    """Test checkpoint saving logic in detail"""
 
-     @pytest.fixture
-     def mock_redis_client(self):
-         """Create a mock Redis client"""
-         return MagicMock()
+    @pytest.fixture
+    def mock_redis_client(self):
+        """Create a mock Redis client"""
+        return MagicMock()
 
-     @pytest.fixture
-     def handler(self, mock_redis_client):
-         """Create RedisSignalHandler with mocked Redis"""
-         with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-             mock_from_url.return_value = mock_redis_client
-             handler = RedisSignalHandler("redis://localhost:6379")
-             handler.client = mock_redis_client
-             return handler
+    @pytest.fixture
+    def handler(self, mock_redis_client):
+        """Create RedisSignalHandler with mocked Redis"""
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_redis_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_redis_client
+            return handler
 
-     def test_save_checkpoint_sets_stream_expiration(self, handler, mock_redis_client):
-         """Test that checkpoint stream is set to expire after CONTROL_STREAM_TTL"""
-         mock_redis_client.xadd.return_value = "1234567890-1"
+    def test_save_checkpoint_sets_stream_expiration(self, handler, mock_redis_client):
+        """Test that checkpoint stream is set to expire after CONTROL_STREAM_TTL"""
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         checkpoint_data = {"state": "scanning", "share": "\\\\server\\share1"}
+        checkpoint_data = {"state": "scanning", "share": "\\\\server\\share1"}
 
-         handler.save_checkpoint("exec-123", checkpoint_data)
+        handler.save_checkpoint("exec-123", checkpoint_data)
 
-         # Verify expire was called with correct TTL
-         mock_redis_client.expire.assert_called_once_with("scan:checkpoint:exec-123", 86400)
+        # Verify expire was called with correct TTL
+        mock_redis_client.expire.assert_called_once_with("scan:checkpoint:exec-123", 86400)
 
-     def test_save_checkpoint_streams_to_correct_key(self, handler, mock_redis_client):
-         """Test that checkpoint is saved to correct Redis stream key"""
-         mock_redis_client.xadd.return_value = "1234567890-1"
+    def test_save_checkpoint_streams_to_correct_key(self, handler, mock_redis_client):
+        """Test that checkpoint is saved to correct Redis stream key"""
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         checkpoint_data = {"state": "scanning"}
+        checkpoint_data = {"state": "scanning"}
 
-         handler.save_checkpoint("exec-123", checkpoint_data)
+        handler.save_checkpoint("exec-123", checkpoint_data)
 
-         # Verify xadd was called with correct stream key
-         call_args = mock_redis_client.xadd.call_args
-         stream_key = call_args[0][0]
-         assert stream_key == "scan:checkpoint:exec-123"
+        # Verify xadd was called with correct stream key
+        call_args = mock_redis_client.xadd.call_args
+        stream_key = call_args[0][0]
+        assert stream_key == "scan:checkpoint:exec-123"
 
-     def test_save_checkpoint_serializes_list_fields_to_json(self, handler, mock_redis_client):
-         """Test that list fields are JSON-serialized"""
-         import json
-         mock_redis_client.xadd.return_value = "1234567890-1"
+    def test_save_checkpoint_serializes_list_fields_to_json(self, handler, mock_redis_client):
+        """Test that list fields are JSON-serialized"""
+        import json
 
-         shares_scanned = ["share1", "share2", "share3"]
-         shares_failed = ["share_bad"]
-         complete_dirs = ["/path1", "/path2"]
-         failed_dirs = ["/path_error"]
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         checkpoint_data = {
-             "state": "scanning",
-             "share": "current_share",
-             "shares_scanned": shares_scanned,
-             "shares_failed": shares_failed,
-             "complete_dirs": complete_dirs,
-             "failed_dirs": failed_dirs,
-         }
+        shares_scanned = ["share1", "share2", "share3"]
+        shares_failed = ["share_bad"]
+        complete_dirs = ["/path1", "/path2"]
+        failed_dirs = ["/path_error"]
 
-         handler.save_checkpoint("exec-123", checkpoint_data)
+        checkpoint_data = {
+            "state": "scanning",
+            "share": "current_share",
+            "shares_scanned": shares_scanned,
+            "shares_failed": shares_failed,
+            "complete_dirs": complete_dirs,
+            "failed_dirs": failed_dirs,
+        }
 
-         # Extract the message data passed to xadd
-         call_args = mock_redis_client.xadd.call_args
-         message_data = call_args[0][1]
+        handler.save_checkpoint("exec-123", checkpoint_data)
 
-         # Verify list fields are JSON-serialized
-         assert message_data["shares_scanned"] == json.dumps(shares_scanned)
-         assert message_data["shares_failed"] == json.dumps(shares_failed)
-         assert message_data["complete_dirs"] == json.dumps(complete_dirs)
-         assert message_data["failed_dirs"] == json.dumps(failed_dirs)
+        # Extract the message data passed to xadd
+        call_args = mock_redis_client.xadd.call_args
+        message_data = call_args[0][1]
 
-     def test_save_checkpoint_handles_empty_lists(self, handler, mock_redis_client):
-         """Test that empty lists are properly handled"""
-         mock_redis_client.xadd.return_value = "1234567890-1"
+        # Verify list fields are JSON-serialized
+        assert message_data["shares_scanned"] == json.dumps(shares_scanned)
+        assert message_data["shares_failed"] == json.dumps(shares_failed)
+        assert message_data["complete_dirs"] == json.dumps(complete_dirs)
+        assert message_data["failed_dirs"] == json.dumps(failed_dirs)
 
-         checkpoint_data = {
-             "state": "scanning",
-             "share": "current_share",
-             "shares_scanned": [],
-             "shares_failed": [],
-             "complete_dirs": [],
-             "failed_dirs": [],
-         }
+    def test_save_checkpoint_handles_empty_lists(self, handler, mock_redis_client):
+        """Test that empty lists are properly handled"""
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         handler.save_checkpoint("exec-123", checkpoint_data)
+        checkpoint_data = {
+            "state": "scanning",
+            "share": "current_share",
+            "shares_scanned": [],
+            "shares_failed": [],
+            "complete_dirs": [],
+            "failed_dirs": [],
+        }
 
-         call_args = mock_redis_client.xadd.call_args
-         message_data = call_args[0][1]
+        handler.save_checkpoint("exec-123", checkpoint_data)
 
-         # Verify empty lists are properly serialized
-         assert message_data["shares_scanned"] == "[]"
-         assert message_data["shares_failed"] == "[]"
-         assert message_data["complete_dirs"] == "[]"
-         assert message_data["failed_dirs"] == "[]"
+        call_args = mock_redis_client.xadd.call_args
+        message_data = call_args[0][1]
 
-     def test_save_checkpoint_handles_missing_list_fields(self, handler, mock_redis_client):
-         """Test checkpoint save when list fields are missing from input"""
-         mock_redis_client.xadd.return_value = "1234567890-1"
+        # Verify empty lists are properly serialized
+        assert message_data["shares_scanned"] == "[]"
+        assert message_data["shares_failed"] == "[]"
+        assert message_data["complete_dirs"] == "[]"
+        assert message_data["failed_dirs"] == "[]"
 
-         # Only provide state and share, omit list fields
-         checkpoint_data = {
-             "state": "scanning",
-             "share": "current_share",
-         }
+    def test_save_checkpoint_handles_missing_list_fields(self, handler, mock_redis_client):
+        """Test checkpoint save when list fields are missing from input"""
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         handler.save_checkpoint("exec-123", checkpoint_data)
+        # Only provide state and share, omit list fields
+        checkpoint_data = {
+            "state": "scanning",
+            "share": "current_share",
+        }
 
-         call_args = mock_redis_client.xadd.call_args
-         message_data = call_args[0][1]
+        handler.save_checkpoint("exec-123", checkpoint_data)
 
-         # Verify missing list fields default to empty lists
-         assert message_data["shares_scanned"] == "[]"
-         assert message_data["shares_failed"] == "[]"
-         assert message_data["complete_dirs"] == "[]"
-         assert message_data["failed_dirs"] == "[]"
+        call_args = mock_redis_client.xadd.call_args
+        message_data = call_args[0][1]
 
-     def test_save_checkpoint_includes_timestamp(self, handler, mock_redis_client):
-         """Test that checkpoint includes timestamp"""
-         mock_redis_client.xadd.return_value = "1234567890-1"
+        # Verify missing list fields default to empty lists
+        assert message_data["shares_scanned"] == "[]"
+        assert message_data["shares_failed"] == "[]"
+        assert message_data["complete_dirs"] == "[]"
+        assert message_data["failed_dirs"] == "[]"
 
-         checkpoint_data = {"state": "scanning"}
+    def test_save_checkpoint_includes_timestamp(self, handler, mock_redis_client):
+        """Test that checkpoint includes timestamp"""
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         with patch("function.redis_signal_handler.datetime") as mock_datetime:
-             mock_datetime.utcnow.return_value.isoformat.return_value = "2026-01-21T09:00:00.000000"
-             handler.save_checkpoint("exec-123", checkpoint_data)
+        checkpoint_data = {"state": "scanning"}
 
-         call_args = mock_redis_client.xadd.call_args
-         message_data = call_args[0][1]
+        with patch("function.redis_signal_handler.datetime") as mock_datetime:
+            mock_datetime.utcnow.return_value.isoformat.return_value = "2026-01-21T09:00:00.000000"
+            handler.save_checkpoint("exec-123", checkpoint_data)
 
-         # Verify timestamp is present
-         assert "timestamp" in message_data
-         assert message_data["timestamp"] == "2026-01-21T09:00:00.000000"
+        call_args = mock_redis_client.xadd.call_args
+        message_data = call_args[0][1]
 
-     def test_save_checkpoint_returns_message_id(self, handler, mock_redis_client):
-         """Test that save_checkpoint returns the message ID from xadd"""
-         expected_message_id = "1234567890-1"
-         mock_redis_client.xadd.return_value = expected_message_id
+        # Verify timestamp is present
+        assert "timestamp" in message_data
+        assert message_data["timestamp"] == "2026-01-21T09:00:00.000000"
 
-         checkpoint_data = {"state": "scanning"}
+    def test_save_checkpoint_returns_message_id(self, handler, mock_redis_client):
+        """Test that save_checkpoint returns the message ID from xadd"""
+        expected_message_id = "1234567890-1"
+        mock_redis_client.xadd.return_value = expected_message_id
 
-         result = handler.save_checkpoint("exec-123", checkpoint_data)
+        checkpoint_data = {"state": "scanning"}
 
-         assert result == expected_message_id
+        result = handler.save_checkpoint("exec-123", checkpoint_data)
 
-     def test_save_checkpoint_returns_none_on_redis_error(self, handler, mock_redis_client):
-         """Test that save_checkpoint returns None on Redis error"""
-         import redis
-         mock_redis_client.xadd.side_effect = redis.exceptions.RedisError("Connection refused")
+        assert result == expected_message_id
 
-         checkpoint_data = {"state": "scanning"}
+    def test_save_checkpoint_returns_none_on_redis_error(self, handler, mock_redis_client):
+        """Test that save_checkpoint returns None on Redis error"""
+        import redis
 
-         result = handler.save_checkpoint("exec-123", checkpoint_data)
+        mock_redis_client.xadd.side_effect = redis.exceptions.RedisError("Connection refused")
 
-         assert result is None
+        checkpoint_data = {"state": "scanning"}
 
-     def test_save_checkpoint_reconnects_on_redis_error(self, handler, mock_redis_client):
-         """Test that save_checkpoint triggers reconnection on Redis error"""
-         import redis
-         mock_redis_client.xadd.side_effect = redis.exceptions.RedisError("Connection refused")
+        result = handler.save_checkpoint("exec-123", checkpoint_data)
 
-         checkpoint_data = {"state": "scanning"}
+        assert result is None
 
-         with patch.object(handler, "_connect") as mock_connect:
-             handler.save_checkpoint("exec-123", checkpoint_data)
-             mock_connect.assert_called_once()
+    def test_save_checkpoint_reconnects_on_redis_error(self, handler, mock_redis_client):
+        """Test that save_checkpoint triggers reconnection on Redis error"""
+        import redis
 
-     def test_save_checkpoint_handles_generic_exception(self, handler, mock_redis_client):
-         """Test that save_checkpoint handles generic exceptions"""
-         mock_redis_client.xadd.side_effect = Exception("Unknown error")
+        mock_redis_client.xadd.side_effect = redis.exceptions.RedisError("Connection refused")
 
-         checkpoint_data = {"state": "scanning"}
+        checkpoint_data = {"state": "scanning"}
 
-         result = handler.save_checkpoint("exec-123", checkpoint_data)
+        with patch.object(handler, "_connect") as mock_connect:
+            handler.save_checkpoint("exec-123", checkpoint_data)
+            mock_connect.assert_called_once()
 
-         assert result is None
+    def test_save_checkpoint_handles_generic_exception(self, handler, mock_redis_client):
+        """Test that save_checkpoint handles generic exceptions"""
+        mock_redis_client.xadd.side_effect = Exception("Unknown error")
 
-     def test_save_checkpoint_includes_objects_count_in_logging(self, handler, mock_redis_client):
-         """Test that objects_count from checkpoint_data is included in debug logging"""
-         mock_redis_client.xadd.return_value = "1234567890-1"
+        checkpoint_data = {"state": "scanning"}
 
-         checkpoint_data = {
-             "state": "scanning",
-             "objects_count": 42,
-         }
+        result = handler.save_checkpoint("exec-123", checkpoint_data)
 
-         with patch("function.redis_signal_handler.logger") as mock_logger:
-             handler.save_checkpoint("exec-123", checkpoint_data)
-             # Logger should include objects_count in the debug message
-             mock_logger.debug.assert_called_once()
+        assert result is None
 
-     def test_save_checkpoint_with_complex_data(self, handler, mock_redis_client):
-         """Test checkpoint save with all fields populated"""
-         import json
-         mock_redis_client.xadd.return_value = "1234567890-1"
+    def test_save_checkpoint_includes_objects_count_in_logging(self, handler, mock_redis_client):
+        """Test that objects_count from checkpoint_data is included in debug logging"""
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         checkpoint_data = {
-             "state": "scanning_directory",
-             "share": "\\\\server\\documents",
-             "shares_scanned": ["share1", "share2"],
-             "shares_failed": ["share_bad"],
-             "complete_dirs": ["/dir1", "/dir2/subdir"],
-             "failed_dirs": ["/dir_error"],
-             "objects_count": 1500,
-         }
+        checkpoint_data = {
+            "state": "scanning",
+            "objects_count": 42,
+        }
 
-         result = handler.save_checkpoint("exec-123", checkpoint_data)
+        with patch("function.redis_signal_handler.logger") as mock_logger:
+            handler.save_checkpoint("exec-123", checkpoint_data)
+            # Logger should include objects_count in the debug message
+            mock_logger.debug.assert_called_once()
 
-         assert result == "1234567890-1"
-         mock_redis_client.xadd.assert_called_once()
-         mock_redis_client.expire.assert_called_once_with("scan:checkpoint:exec-123", 86400)
-         mock_redis_client.xtrim.assert_called_once()
+    def test_save_checkpoint_with_complex_data(self, handler, mock_redis_client):
+        """Test checkpoint save with all fields populated"""
+        import json
 
-         # Verify message structure
-         call_args = mock_redis_client.xadd.call_args
-         message_data = call_args[0][1]
+        mock_redis_client.xadd.return_value = "1234567890-1"
 
-         assert message_data["state"] == "scanning_directory"
-         assert message_data["share"] == "\\\\server\\documents"
-         assert message_data["shares_scanned"] == json.dumps(["share1", "share2"])
-         assert message_data["shares_failed"] == json.dumps(["share_bad"])
-         assert message_data["complete_dirs"] == json.dumps(["/dir1", "/dir2/subdir"])
-         assert message_data["failed_dirs"] == json.dumps(["/dir_error"])
+        checkpoint_data = {
+            "state": "scanning_directory",
+            "share": "\\\\server\\documents",
+            "shares_scanned": ["share1", "share2"],
+            "shares_failed": ["share_bad"],
+            "complete_dirs": ["/dir1", "/dir2/subdir"],
+            "failed_dirs": ["/dir_error"],
+            "objects_count": 1500,
+        }
+
+        result = handler.save_checkpoint("exec-123", checkpoint_data)
+
+        assert result == "1234567890-1"
+        mock_redis_client.xadd.assert_called_once()
+        mock_redis_client.expire.assert_called_once_with("scan:checkpoint:exec-123", 86400)
+        mock_redis_client.xtrim.assert_called_once()
+
+        # Verify message structure
+        call_args = mock_redis_client.xadd.call_args
+        message_data = call_args[0][1]
+
+        assert message_data["state"] == "scanning_directory"
+        assert message_data["share"] == "\\\\server\\documents"
+        assert message_data["shares_scanned"] == json.dumps(["share1", "share2"])
+        assert message_data["shares_failed"] == json.dumps(["share_bad"])
+        assert message_data["complete_dirs"] == json.dumps(["/dir1", "/dir2/subdir"])
+        assert message_data["failed_dirs"] == json.dumps(["/dir_error"])
 
 
 class TestHealthCheck:
-   """Test health check functionality"""
+    """Test health check functionality"""
 
-   def test_health_check_success(self):
-       """Test successful health check"""
-       mock_client = MagicMock()
-       mock_client.ping.return_value = True
+    def test_health_check_success(self):
+        """Test successful health check"""
+        mock_client = MagicMock()
+        mock_client.ping.return_value = True
 
-       with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-           mock_from_url.return_value = mock_client
-           handler = RedisSignalHandler("redis://localhost:6379")
-           handler.client = mock_client
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
 
-           result = handler.health_check()
+            result = handler.health_check()
 
-           assert result is True
-           mock_client.ping.assert_called()
+            assert result is True
+            mock_client.ping.assert_called()
 
-   def test_health_check_first_ping_fails_reconnect_succeeds(self):
-       """Test health check with reconnection recovery"""
-       mock_client = MagicMock()
-       # First ping fails, then after reconnect succeeds
-       mock_client.ping.side_effect = [
-           Exception("Connection lost"),
-           True  # After reconnect, ping succeeds
-       ]
+    def test_health_check_first_ping_fails_reconnect_succeeds(self):
+        """Test health check with reconnection recovery"""
+        mock_client = MagicMock()
+        # First ping fails, then after reconnect succeeds
+        mock_client.ping.side_effect = [
+            Exception("Connection lost"),
+            True,  # After reconnect, ping succeeds
+        ]
 
-       with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-           mock_from_url.return_value = mock_client
-           handler = RedisSignalHandler("redis://localhost:6379")
-           handler.client = mock_client
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
 
-           result = handler.health_check()
+            result = handler.health_check()
 
-           assert result is True
-           assert mock_client.ping.call_count == 2  # First failed, then after reconnect
+            assert result is True
+            assert mock_client.ping.call_count == 2  # First failed, then after reconnect
 
-   def test_health_check_both_pings_fail(self):
-       """Test health check when reconnection also fails"""
-       import redis
-       mock_client = MagicMock()
-       # RedisError triggers reconnection, but then client becomes None due to failed reconnection
-       mock_client.ping.side_effect = redis.exceptions.RedisError("Connection refused")
+    def test_health_check_both_pings_fail(self):
+        """Test health check when reconnection also fails"""
+        import redis
 
-       with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-           mock_from_url.return_value = mock_client
-           handler = RedisSignalHandler("redis://localhost:6379")
-           handler.client = mock_client
+        mock_client = MagicMock()
+        # RedisError triggers reconnection, but then client becomes None due to failed reconnection
+        mock_client.ping.side_effect = redis.exceptions.RedisError("Connection refused")
 
-           result = handler.health_check()
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
 
-           # Should return False when both attempts fail
-           assert result is False
+            result = handler.health_check()
 
-   def test_health_check_redis_error_exception(self):
-       """Test health check with RedisError exception on first ping"""
-       import redis
-       mock_client = MagicMock()
-       # First ping fails, second succeeds after reconnect
-       mock_client.ping.side_effect = [
-           redis.exceptions.RedisError("Redis down"),
-           True  # Recovery after reconnect
-       ]
+            # Should return False when both attempts fail
+            assert result is False
 
-       with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-           mock_from_url.return_value = mock_client
-           handler = RedisSignalHandler("redis://localhost:6379")
-           handler.client = mock_client
+    def test_health_check_redis_error_exception(self):
+        """Test health check with RedisError exception on first ping"""
+        import redis
 
-           result = handler.health_check()
+        mock_client = MagicMock()
+        # First ping fails, second succeeds after reconnect
+        mock_client.ping.side_effect = [
+            redis.exceptions.RedisError("Redis down"),
+            True,  # Recovery after reconnect
+        ]
 
-           # Should recover after reconnection
-           assert result is True
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
 
-   def test_health_check_timeout_and_recovery(self):
-       """Test health check handles timeout and recovers"""
-       import redis
-       mock_client = MagicMock()
-       # First ping times out, then succeeds after reconnect
-       mock_client.ping.side_effect = [
-           redis.exceptions.TimeoutError("Connection timeout"),
-           True  # Recovery after reconnect
-       ]
+            result = handler.health_check()
 
-       with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-           mock_from_url.return_value = mock_client
-           handler = RedisSignalHandler("redis://localhost:6379")
-           handler.client = mock_client
+            # Should recover after reconnection
+            assert result is True
 
-           result = handler.health_check()
+    def test_health_check_timeout_and_recovery(self):
+        """Test health check handles timeout and recovers"""
+        import redis
 
-           # Should recover after reconnection
-           assert result is True
+        mock_client = MagicMock()
+        # First ping times out, then succeeds after reconnect
+        mock_client.ping.side_effect = [
+            redis.exceptions.TimeoutError("Connection timeout"),
+            True,  # Recovery after reconnect
+        ]
+
+        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_client
+            handler = RedisSignalHandler("redis://localhost:6379")
+            handler.client = mock_client
+
+            result = handler.health_check()
+
+            # Should recover after reconnection
+            assert result is True

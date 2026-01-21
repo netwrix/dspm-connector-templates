@@ -200,7 +200,11 @@ class StateManager:
 
         self.check_for_state_changes()
         with self._state_lock:
-            return self.requested_state == "pause" and self.control_context is not None and self.control_context.pause_requested
+            return (
+                self.requested_state == "pause"
+                and self.control_context is not None
+                and self.control_context.pause_requested
+            )
 
     def should_checkpoint(self) -> bool:
         """

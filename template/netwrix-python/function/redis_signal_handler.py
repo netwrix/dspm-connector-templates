@@ -130,7 +130,7 @@ class RedisSignalHandler:
                 "shares_scanned": json.dumps(list(checkpoint_data.get("shares_scanned", []))),
                 "shares_failed": json.dumps(list(checkpoint_data.get("shares_failed", []))),
                 "complete_dirs": json.dumps(list(checkpoint_data.get("complete_dirs", []))),
-                "failed_dirs": json.dumps(list(checkpoint_data.get("failed_dirs", [])))
+                "failed_dirs": json.dumps(list(checkpoint_data.get("failed_dirs", []))),
             }
 
             message_id = self.client.xadd(checkpoint_stream_key, message_data)
