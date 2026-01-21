@@ -211,7 +211,6 @@ class StateManager:
         """
         current_time = time.time()
         elapsed = current_time - self.last_checkpoint
-        logger.info(f"should_checkpoint, elapsed=%s/%s", int(elapsed), self.checkpoint_interval)
         if elapsed >= self.checkpoint_interval:
             return True
         return False
