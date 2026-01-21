@@ -21,6 +21,12 @@ RUN if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; th
 RUN groupadd -r app && useradd -r -g app -m app
 RUN chown app /home/app
 
+# Create /app/run entrypoint for connector-api job mode
+# This allows the connector-api to invoke the handler directly without Flask
+RUN mkdir -p /app && \
+    printf '#!/bin/sh\nexec python /home/app/index.py\n' > /app/run && \
+    chmod +x /app/run
+
 USER app
 
 ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
