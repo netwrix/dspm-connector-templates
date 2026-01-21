@@ -407,7 +407,6 @@ class TestCheckpointLogic:
 
      def test_save_checkpoint_handles_empty_lists(self, handler, mock_redis_client):
          """Test that empty lists are properly handled"""
-         import json
          mock_redis_client.xadd.return_value = "1234567890-1"
 
          checkpoint_data = {
@@ -432,7 +431,6 @@ class TestCheckpointLogic:
 
      def test_save_checkpoint_handles_missing_list_fields(self, handler, mock_redis_client):
          """Test checkpoint save when list fields are missing from input"""
-         import json
          mock_redis_client.xadd.return_value = "1234567890-1"
 
          # Only provide state and share, omit list fields
@@ -454,7 +452,6 @@ class TestCheckpointLogic:
 
      def test_save_checkpoint_includes_timestamp(self, handler, mock_redis_client):
          """Test that checkpoint includes timestamp"""
-         from datetime import datetime
          mock_redis_client.xadd.return_value = "1234567890-1"
 
          checkpoint_data = {"state": "scanning"}
