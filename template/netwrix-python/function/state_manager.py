@@ -200,11 +200,7 @@ class StateManager:
 
         self.check_for_state_changes()
         with self._state_lock:
-            return (
-                self.requested_state == "pause"
-                and self.control_context is not None
-                and self.control_context.pause_requested
-            )
+            return self.requested_state == "pause" and self.control_context is not None and self.control_context.pause_requested
 
     def should_checkpoint(self) -> bool:
         """
@@ -214,7 +210,9 @@ class StateManager:
             True if checkpoint interval has elapsed, False otherwise
         """
         current_time = time.time()
-        if current_time - self.last_checkpoint >= self.checkpoint_interval:
+        elapsed = current_time - self.last_checkpoint
+        logger.info(f"should_checkpoint, elapsed=%s/%s", int(elapsed), self.checkpoint_interval)
+        if elapsed >= self.checkpoint_interval:
             return True
         return False
 

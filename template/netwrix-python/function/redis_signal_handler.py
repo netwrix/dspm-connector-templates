@@ -111,11 +111,11 @@ class RedisSignalHandler:
             execution_id: The scan execution ID
             checkpoint_data: Dictionary containing checkpoint data
                 - state: current scanning state
-                - scanned_paths: set of completed paths
-                - current_path: path being processed
-                - objects_count: number of objects scanned
-                - failed_paths: list of failed paths
-                - worker_states: individual worker progress
+                - share: current share being scanned
+                - shares_scanned: list of completed share names
+                - shares_failed: list of failed share names
+                - complete_dirs: list of completed dirs in the current share
+                - failed_dirs: list of failed dirs in the current share
 
         Returns:
             Message ID if successful, None otherwise
@@ -125,12 +125,12 @@ class RedisSignalHandler:
 
             message_data = {
                 "timestamp": datetime.utcnow().isoformat(),
-                "state": json.dumps(checkpoint_data.get("state", {})),
-                "scanned_paths": json.dumps(list(checkpoint_data.get("scanned_paths", []))),
-                "current_path": checkpoint_data.get("current_path", ""),
-                "objects_count": str(checkpoint_data.get("objects_count", 0)),
-                "failed_paths": json.dumps(checkpoint_data.get("failed_paths", [])),
-                "worker_states": json.dumps(checkpoint_data.get("worker_states", {})),
+                "state": checkpoint_data.get("state", ""),
+                "share": checkpoint_data.get("share", ""),
+                "shares_scanned": json.dumps(list(checkpoint_data.get("shares_scanned", []))),
+                "shares_failed": json.dumps(list(checkpoint_data.get("shares_failed", []))),
+                "complete_dirs": json.dumps(list(checkpoint_data.get("complete_dirs", []))),
+                "failed_dirs": json.dumps(list(checkpoint_data.get("failed_dirs", [])))
             }
 
             message_id = self.client.xadd(checkpoint_stream_key, message_data)

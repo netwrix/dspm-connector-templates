@@ -779,6 +779,7 @@ def call_handler(path: str):
                         )
                 else:
                     context.update_execution(status="failed", completed_at=completed_at)
+                    context.log.error(f"Failed {context.function_type} operation, status_code={response_data["statusCode"]}")
                     context.log.error(
                         f"Failed {context.function_type} operation",
                         function_type=context.function_type,
