@@ -61,6 +61,10 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
     uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
+# Copy template-provided support files (state_manager, redis_signal_handler, etc)
+COPY --chown=app:app state_manager.py      .
+COPY --chown=app:app redis_signal_handler.py .
+
 COPY --chown=app:app function/  .
 
 # PowerShell

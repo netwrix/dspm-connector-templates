@@ -58,7 +58,11 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
     uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
-# Copy template-provided function files (state_manager, redis_signal_handler, etc)
+# Copy template-provided support files (state_manager, redis_signal_handler, etc) from parent directory
+COPY --chown=app:app ./template/netwrix-python/state_manager.py       .
+COPY --chown=app:app ./template/netwrix-python/redis_signal_handler.py .
+
+# Copy template-provided function files
 COPY --chown=app:app ./template/netwrix-python/function/ .
 
 # Copy function-specific code (handler, requirements, etc) - this overrides template defaults if present

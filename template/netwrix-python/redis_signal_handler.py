@@ -4,13 +4,14 @@ Redis Signal Handler for graceful stop/pause/resume functionality
 Monitors Redis Streams for control signals from the Core API
 """
 
-import redis
 import json
+import logging
 import os
 import time
 from datetime import datetime
-from typing import Optional, Dict, Any
-import logging
+from typing import Any
+
+import redis
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class RedisSignalHandler:
 
     CONTROL_STREAM_TTL = 86400  # 24 hours
 
-    def __init__(self, redis_url: Optional[str] = None):
+    def __init__(self, redis_url: str | None = None):
         """
         Initialize Redis connection for signal handling
 
@@ -51,7 +52,7 @@ class RedisSignalHandler:
             logger.error(f"Failed to connect to Redis: {str(e)} (redis_url={self.redis_url})")
             self.client = None
 
-    def check_control_signal(self, execution_id: str, last_message_id: str = "0") -> Optional[Dict[str, Any]]:
+    def check_control_signal(self, execution_id: str, last_message_id: str = "0") -> dict[str, Any] | None:
         """
         Check for control signals (STOP, PAUSE, RESUME)
         Non-blocking read from Redis Stream
@@ -103,7 +104,7 @@ class RedisSignalHandler:
             logger.debug(f"Error reading control signal (execution_id={execution_id}, error={str(e)})")
             return None
 
-    def save_checkpoint(self, execution_id: str, checkpoint_data: Dict[str, Any]) -> Optional[str]:
+    def save_checkpoint(self, execution_id: str, checkpoint_data: dict[str, Any]) -> str | None:
         """
         Save checkpoint for pause/resume functionality
 
@@ -111,11 +112,11 @@ class RedisSignalHandler:
             execution_id: The scan execution ID
             checkpoint_data: Dictionary containing checkpoint data
                 - state: current scanning state
-                - scanned_paths: set of completed paths
-                - current_path: path being processed
-                - objects_count: number of objects scanned
-                - failed_paths: list of failed paths
-                - worker_states: individual worker progress
+                - share: current share being scanned
+                - shares_scanned: list of completed share names
+                - shares_failed: list of failed share names
+                - complete_dirs: list of completed dirs in the current share
+                - failed_dirs: list of failed dirs in the current share
 
         Returns:
             Message ID if successful, None otherwise
@@ -125,12 +126,12 @@ class RedisSignalHandler:
 
             message_data = {
                 "timestamp": datetime.utcnow().isoformat(),
-                "state": json.dumps(checkpoint_data.get("state", {})),
-                "scanned_paths": json.dumps(list(checkpoint_data.get("scanned_paths", []))),
-                "current_path": checkpoint_data.get("current_path", ""),
-                "objects_count": str(checkpoint_data.get("objects_count", 0)),
-                "failed_paths": json.dumps(checkpoint_data.get("failed_paths", [])),
-                "worker_states": json.dumps(checkpoint_data.get("worker_states", {})),
+                "state": checkpoint_data.get("state", ""),
+                "share": checkpoint_data.get("share", ""),
+                "shares_scanned": json.dumps(list(checkpoint_data.get("shares_scanned", []))),
+                "shares_failed": json.dumps(list(checkpoint_data.get("shares_failed", []))),
+                "complete_dirs": json.dumps(list(checkpoint_data.get("complete_dirs", []))),
+                "failed_dirs": json.dumps(list(checkpoint_data.get("failed_dirs", []))),
             }
 
             message_id = self.client.xadd(checkpoint_stream_key, message_data)
@@ -157,8 +158,8 @@ class RedisSignalHandler:
             return None
 
     def update_status(
-        self, execution_id: str, status: str, message: str = "", metadata: Dict[str, Any] = None
-    ) -> Optional[str]:
+        self, execution_id: str, status: str, message: str = "", metadata: dict[str, Any] = None
+    ) -> str | None:
         """
         Update status in Redis Stream for monitoring
 
@@ -328,7 +329,7 @@ class ScanControlContext:
                 self.stop_requested = True
                 logger.info(f"Stop signal received (execution_id={self.execution_id})")
                 return True
-            elif action == "PAUSE":
+            if action == "PAUSE":
                 self.pause_requested = True
                 logger.info(f"Pause signal received (execution_id={self.execution_id})")
             elif action == "RESUME":
