@@ -290,8 +290,6 @@ class Context:
         self.secrets: dict[str, str] | None = None
         self.scan_id: str | None = os.getenv("SCAN_ID")
         self.scan_execution_id: str | None = None
-        self.sync_id: str | None = os.getenv("SYNC_ID")
-        self.sync_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
         self.tables: dict[str, BatchManager] = {}
@@ -324,16 +322,7 @@ class Context:
         Build headers dict with caller context information to pass to common functions.
         Only includes headers that have non-None values.
         """
-        headers = {}
-        if self.scan_id:
-            headers["Scan-Id"] = self.scan_id
-        if self.scan_execution_id:
-            headers["Scan-Execution-Id"] = self.scan_execution_id
-        if self.sync_id:
-            headers["Sync-Id"] = self.sync_id
-        if self.sync_execution_id:
-            headers["Sync-Execution-Id"] = self.sync_execution_id
-        return headers
+        return {"Scan-Id": self.scan_id or "", "Scan-Execution-Id": self.scan_execution_id or ""}
 
     def get_connector_state(self) -> dict:
         """
@@ -904,7 +893,6 @@ def run_as_job():
         request_data = {}
 
     ctx.scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
-    ctx.sync_execution_id = request_data.get("syncExecutionId") or os.getenv("SYNC_EXECUTION_ID")
 
     ctx.log.info(
         "Starting job execution",
@@ -912,8 +900,6 @@ def run_as_job():
         function_type=ctx.function_type,
         scan_id=ctx.scan_id,
         scan_execution_id=ctx.scan_execution_id,
-        sync_id=ctx.sync_id,
-        sync_execution_id=ctx.sync_execution_id,
     )
 
     event = Event(execution_mode="job")
