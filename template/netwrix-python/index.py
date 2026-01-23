@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import signal
+import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -266,12 +267,22 @@ class BatchManager:
 
 
 class Event:
-    def __init__(self):
-        self.body = request.get_data()
-        self.headers = request.headers
-        self.method = request.method
-        self.query = request.args
-        self.path = request.path
+    def __init__(self, execution_mode: str = "http"):
+        if execution_mode == "http":
+            # OpenFaaS mode: read from Flask request
+            self.body = request.get_data()
+            self.headers = request.headers
+            self.method = request.method
+            self.query = request.args
+            self.path = request.path
+        else:
+            # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
+            request_data = os.getenv("REQUEST_DATA", "{}")
+            self.body = request_data.encode()
+            self.headers = {}
+            self.method = "POST"
+            self.query = {}
+            self.path = "/"
 
 
 class Context:
@@ -311,7 +322,7 @@ class Context:
         Build headers dict with caller context information to pass to common functions.
         Only includes headers that have non-None values.
         """
-        return {"Scan-Id": self.scan_id, "Scan-Execution-Id": self.scan_execution_id}
+        return {"Scan-Id": self.scan_id or "", "Scan-Execution-Id": self.scan_execution_id or ""}
 
     def get_connector_state(self) -> dict:
         """
@@ -636,27 +647,59 @@ class ContextLogger:
 
 
 def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
-    """Read all secrets from OpenFaaS secret mount path and build a dictionary"""
+    """Read secrets from available mount paths.
+
+    Supports both OpenFaaS (/var/openfaas/secrets/) and connector-api (/var/secrets/) paths.
+    Both use the same flat file structure: <base-path>/<secret-name> containing the raw value.
+    """
     secrets_dict: dict[str, str] = {}
-    secrets_dir = "/var/openfaas/secrets/"
+
+    # Both paths use flat file structure (not directories)
+    connector_api_path = "/var/secrets/"
+    openfaas_path = "/var/openfaas/secrets/"
 
     secret_mappings = os.getenv("SECRET_MAPPINGS", "").split(",")
-    secret_mappings_dict = {mapping.split(":")[0]: mapping.split(":")[1] for mapping in secret_mappings}
-    for key, path in secret_mappings_dict.items():
-        try:
-            with open(os.path.join(secrets_dir, path)) as f:
-                secrets_dict[key] = f.read().strip()
-                context.log.info(
-                    "Loaded secret",
-                    secret_name=key,
+    secret_mappings_dict = {
+        mapping.split(":")[0]: mapping.split(":")[1] for mapping in secret_mappings if ":" in mapping
+    }
+
+    for key, secret_name in secret_mappings_dict.items():
+        secret_value = None
+
+        # Try connector-api path first: /var/secrets/<secret-name>
+        connector_api_secret_path = os.path.join(connector_api_path, secret_name)
+        if os.path.isfile(connector_api_secret_path):
+            try:
+                with open(connector_api_secret_path) as f:
+                    secret_value = f.read().strip()
+            except Exception as e:
+                context.log.error(
+                    "Error reading secret file from connector-api path",
+                    filename=connector_api_secret_path,
+                    error=str(e),
+                    error_type=type(e).__name__,
                 )
-        except Exception as e:
-            context.log.error(
-                "Error reading secret file",
-                filename=path,
-                error=str(e),
-                error_type=type(e).__name__,
-            )
+
+        # Fallback to OpenFaaS path: /var/openfaas/secrets/<secret-name>
+        if secret_value is None:
+            openfaas_secret_path = os.path.join(openfaas_path, secret_name)
+            if os.path.isfile(openfaas_secret_path):
+                try:
+                    with open(openfaas_secret_path) as f:
+                        secret_value = f.read().strip()
+                except Exception as e:
+                    context.log.error(
+                        "Error reading secret file from OpenFaaS path",
+                        filename=openfaas_secret_path,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
+
+        if secret_value is not None:
+            secrets_dict[key] = secret_value
+            context.log.info("Loaded secret", secret_key=key)
+        else:
+            context.log.warning("Secret not found", secret_key=key, secret_name=secret_name)
 
     return secrets_dict
 
@@ -816,7 +859,137 @@ def handle_shutdown(signum, frame):
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 
-if __name__ == "__main__":
+
+def get_execution_mode() -> str:
+    """Detect execution mode based on environment.
+
+    Returns:
+        str: 'job' for connector-api job mode, 'http' for OpenFaaS HTTP mode
+    """
+    # Explicit mode override
+    if os.getenv("EXECUTION_MODE") == "job":
+        return "job"
+
+    # If REQUEST_DATA is set, assume job mode
+    if os.getenv("REQUEST_DATA"):
+        return "job"
+
+    # Default to OpenFaaS HTTP mode
+    return "http"
+
+
+def run_as_job():
+    """Execute handler once as a Kubernetes job."""
+    started_at = datetime.now(UTC).isoformat()
+
+    ctx = Context()
+    ctx.secrets = get_secrets(ctx)
+
+    # Parse scan/sync execution ID from environment or REQUEST_DATA
+    request_data_str = os.getenv("REQUEST_DATA", "{}")
+    try:
+        request_data = json.loads(request_data_str)
+    except json.JSONDecodeError:
+        request_data = {}
+
+    ctx.scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
+
+    ctx.log.info(
+        "Starting job execution",
+        execution_mode="job",
+        function_type=ctx.function_type,
+        scan_id=ctx.scan_id,
+        scan_execution_id=ctx.scan_execution_id,
+    )
+
+    event = Event(execution_mode="job")
+
+    try:
+        # Update execution status to running for scan/sync operations
+        if ctx.function_type in ("access-scan", "sync"):
+            ctx.update_execution(status="running")
+            ctx.log.info("Started operation", function_type=ctx.function_type)
+
+        # Run the handler
+        response = handler.handle(event, ctx)
+
+        # Flush any remaining batched data
+        ctx.flush_tables()
+
+        completed_at = datetime.now(UTC).isoformat()
+
+        # Update execution status based on response
+        status_code = response.get("statusCode", 500)
+        success = status_code == 200
+
+        if ctx.function_type in ("access-scan", "sync"):
+            if success:
+                # Check if handler set a specific status (like 'stopped')
+                if response.get("body", {}).get("status") == "stopped":
+                    ctx.update_execution(status="stopped", completed_at=completed_at)
+                    ctx.log.info("Operation was stopped", function_type=ctx.function_type, status="stopped")
+                else:
+                    ctx.update_execution(status="completed", completed_at=completed_at)
+                    ctx.log.info(
+                        f"Completed {ctx.function_type} operation successfully",
+                        function_type=ctx.function_type,
+                        status="completed",
+                    )
+            else:
+                ctx.update_execution(status="failed", completed_at=completed_at)
+                ctx.log.error(
+                    f"Failed {ctx.function_type} operation",
+                    function_type=ctx.function_type,
+                    status="failed",
+                    status_code=status_code,
+                )
+
+        # Determine final status
+        final_status = response.get("body", {}).get("status", "completed") if success else "failed"
+
+        # Output result as JSON to stdout
+        result = {
+            "success": success,
+            "status": final_status,
+            "statusCode": status_code,
+            "body": response.get("body", {}),
+            "startedAt": started_at,
+            "completedAt": completed_at,
+        }
+
+        ctx.log.info("Job execution completed", success=success, status=final_status)
+
+    except Exception as e:
+        completed_at = datetime.now(UTC).isoformat()
+
+        # Update execution status to failed for scan/sync operations
+        if ctx.function_type in ("access-scan", "sync"):
+            ctx.update_execution(status="failed", completed_at=completed_at)
+
+        ctx.log.error(
+            "Job execution failed",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+
+        result = {
+            "success": False,
+            "status": "failed",
+            "statusCode": 500,
+            "body": {"error": str(e)},
+            "startedAt": started_at,
+            "completedAt": completed_at,
+        }
+
+    # Flush OpenTelemetry before exiting
+    flush_opentelemetry()
+
+    print(json.dumps(result))
+    sys.exit(0 if result["success"] else 1)
+
+
+def run_as_http_server():
+    """Start Flask HTTP server for OpenFaaS mode."""
     if os.getenv("DEBUG_MODE", "false").lower() == "true":
         try:
             import debugpy  # noqa: T100
@@ -833,3 +1006,19 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False, use_reloader=False)
     else:
         serve(app, host="0.0.0.0", port=5000)
+
+
+def main():
+    """Main entry point - detect execution mode and run accordingly."""
+    execution_mode = get_execution_mode()
+
+    if execution_mode == "job":
+        # Job mode: run handler once and exit
+        run_as_job()
+    else:
+        # HTTP mode: start Flask server
+        run_as_http_server()
+
+
+if __name__ == "__main__":
+    main()

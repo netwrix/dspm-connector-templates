@@ -16,6 +16,12 @@ RUN --mount=type=cache,target=/var/cache/apk \
 RUN addgroup -S app && adduser app -S -G app
 RUN chown app /home/app
 
+# Create /app/run entrypoint for connector-api job mode
+# This allows the connector-api to invoke the handler directly without Flask
+RUN mkdir -p /app && \
+    printf '#!/bin/sh\nexec python /home/app/index.py\n' > /app/run && \
+    chmod +x /app/run
+
 USER app
 
 ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
