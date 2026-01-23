@@ -166,13 +166,13 @@ class TestRedisSignalHandler:
     def test_health_check_failure(self, handler, mock_redis_client):
         """Test health check failure"""
         import redis
-        
+
         handler.client = mock_redis_client
         # First call raises RedisError (caught and reconnect attempted)
         # Second call raises Exception (caught in except all)
         mock_redis_client.ping.side_effect = [
             redis.exceptions.RedisError("Redis error"),
-            Exception("Redis error after reconnect")
+            Exception("Redis error after reconnect"),
         ]
 
         with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
