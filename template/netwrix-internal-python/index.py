@@ -263,7 +263,7 @@ def call_handler(path):
 
     caller_attributes = {
         "scan_id": event.headers.get("Scan-Id"),
-        "scan_execution_id": event.headers.get("Scan-Execution-Id")
+        "scan_execution_id": event.headers.get("Scan-Execution-Id"),
     }
     context = Context(caller_attributes)
 

@@ -41,7 +41,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional, Dict, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Import here to allow for easier mocking in tests
 from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
@@ -82,7 +83,7 @@ class StateManager:
     def __init__(
         self,
         context,
-        supported_states: Optional[Dict[str, bool]] = None,
+        supported_states: dict[str, bool] | None = None,
         checkpoint_interval: int = 60,
         signal_check_interval: int = 5,
     ):
@@ -167,9 +168,8 @@ class StateManager:
             if signal and self.control_context.stop_requested:
                 self.requested_state = "stop"
                 # Actually transition to stopping state
-                if self.current_state == "running":
-                    if self.set_state("stopping"):
-                        logger.info("State transitioned (from_state=running, to_state=stopping)")
+                if self.current_state == "running" and self.set_state("stopping"):
+                    logger.info("State transitioned (from_state=running, to_state=stopping)")
                 return True
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
@@ -214,11 +214,9 @@ class StateManager:
             True if checkpoint interval has elapsed, False otherwise
         """
         current_time = time.time()
-        if current_time - self.last_checkpoint >= self.checkpoint_interval:
-            return True
-        return False
+        return current_time - self.last_checkpoint >= self.checkpoint_interval
 
-    def save_checkpoint(self, checkpoint_data: Dict[str, Any]) -> Optional[str]:
+    def save_checkpoint(self, checkpoint_data: dict[str, Any]) -> str | None:
         """
         Save execution progress checkpoint
 
@@ -331,7 +329,7 @@ class StateManager:
         """Check if connector supports a state"""
         return self.supported_states.get(state, False)
 
-    def get_supported_states(self) -> Dict[str, bool]:
+    def get_supported_states(self) -> dict[str, bool]:
         """Get all supported states"""
         return self.supported_states.copy()
 

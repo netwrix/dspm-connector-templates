@@ -41,7 +41,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional, Dict, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Import here to allow for easier mocking in tests
 from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
@@ -82,7 +83,7 @@ class StateManager:
     def __init__(
         self,
         context,
-        supported_states: Optional[Dict[str, bool]] = None,
+        supported_states: dict[str, bool] | None = None,
         checkpoint_interval: int = 60,
         signal_check_interval: int = 5,
     ):
@@ -121,7 +122,7 @@ class StateManager:
             # Get execution ID from context caller attributes
             # Internal functions receive this via request headers
             execution_id = self.context.caller_attributes.get("scan_execution_id")
-            
+
             if not execution_id:
                 logger.warning("No execution ID available, signal monitoring disabled")
                 return False
@@ -139,7 +140,9 @@ class StateManager:
             # Update status
             self.redis_handler.update_status(execution_id, "running")
 
-            logger.info(f"State manager initialized (supported_states={self.supported_states}, signal_check_interval={self.signal_check_interval})")
+            logger.info(
+                f"State manager initialized (supported_states={self.supported_states}, signal_check_interval={self.signal_check_interval})"
+            )
             return True
 
         except Exception as e:
@@ -169,9 +172,8 @@ class StateManager:
             if signal and self.control_context.stop_requested:
                 self.requested_state = "stop"
                 # Actually transition to stopping state
-                if self.current_state == "running":
-                    if self.set_state("stopping"):
-                        logger.info("State transitioned (from_state=running, to_state=stopping)")
+                if self.current_state == "running" and self.set_state("stopping"):
+                    logger.info("State transitioned (from_state=running, to_state=stopping)")
                 return True
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
@@ -217,11 +219,9 @@ class StateManager:
         """
         current_time = time.time()
         elapsed = current_time - self.last_checkpoint
-        if elapsed >= self.checkpoint_interval:
-            return True
-        return False
+        return elapsed >= self.checkpoint_interval
 
-    def save_checkpoint(self, checkpoint_data: Dict[str, Any]) -> Optional[str]:
+    def save_checkpoint(self, checkpoint_data: dict[str, Any]) -> str | None:
         """
         Save execution progress checkpoint
 
@@ -239,7 +239,7 @@ class StateManager:
 
         try:
             execution_id = self.context.caller_attributes.get("scan_execution_id")
-                
+
             checkpoint_id = self.redis_handler.save_checkpoint(execution_id, checkpoint_data)
             self.last_checkpoint = time.time()
 
@@ -312,7 +312,7 @@ class StateManager:
             # Update Redis status
             if self.redis_handler:
                 execution_id = self.context.caller_attributes.get("scan_execution_id")
-                    
+
                 self.redis_handler.update_status(
                     execution_id, final_status, "Execution stopped", {"partial_data": final_status == "stopped"}
                 )
@@ -336,7 +336,7 @@ class StateManager:
         """Check if function supports a state"""
         return self.supported_states.get(state, False)
 
-    def get_supported_states(self) -> Dict[str, bool]:
+    def get_supported_states(self) -> dict[str, bool]:
         """Get all supported states"""
         return self.supported_states.copy()
 
