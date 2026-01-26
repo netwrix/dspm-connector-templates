@@ -318,11 +318,11 @@ def call_handler(path):
         with tracer.start_as_current_span("process_request") as span:
             event = Event()
 
-            caller_attributes = {
-                "scan_id": event.headers.get("Scan-Id"),
-                "scan_execution_id": event.headers.get("Scan-Execution-Id"),
-            }
-            context = Context(caller_attributes)
+    caller_attributes = {
+        "scan_id": event.headers.get("Scan-Id"),
+        "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+    }
+    context = Context(caller_attributes)
 
             context.log.info(
                 "Received request",
