@@ -290,6 +290,7 @@ class Context:
         self.secrets: dict[str, str] | None = None
         self.scan_id: str | None = os.getenv("SCAN_ID")
         self.scan_execution_id: str | None = None
+        self.sync_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
         self.tables: dict[str, BatchManager] = {}
@@ -773,6 +774,7 @@ def call_handler(path: str):
 
             request_data = json.loads(event.body)
             context.scan_execution_id = request_data.get("scanExecutionId")
+            context.sync_execution_id = request_data.get("syncExecutionId")
 
             if not context.secrets:
                 context.log.warning("No secrets loaded from secret files")
@@ -893,6 +895,7 @@ def run_as_job():
         request_data = {}
 
     ctx.scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
+    ctx.sync_execution_id = request_data.get("syncExecutionId") or os.getenv("SYNC_EXECUTION_ID")
 
     ctx.log.info(
         "Starting job execution",
