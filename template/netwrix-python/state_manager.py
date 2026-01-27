@@ -41,7 +41,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional, Dict, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Import here to allow for easier mocking in tests
 from function.redis_signal_handler import RedisSignalHandler, ScanControlContext
@@ -82,7 +83,7 @@ class StateManager:
     def __init__(
         self,
         context,
-        supported_states: Optional[Dict[str, bool]] = None,
+        supported_states: dict[str, bool] | None = None,
         checkpoint_interval: int = 60,
         signal_check_interval: int = 5,
     ):
@@ -119,7 +120,7 @@ class StateManager:
         """
         try:
             # Get execution ID
-            execution_id = self.context.sync_execution_id or self.context.scan_execution_id
+            execution_id = self.context.scan_execution_id
             if not execution_id:
                 logger.warning("No execution ID available, signal monitoring disabled")
                 return False
@@ -167,9 +168,8 @@ class StateManager:
             if signal and self.control_context.stop_requested:
                 self.requested_state = "stop"
                 # Actually transition to stopping state
-                if self.current_state == "running":
-                    if self.set_state("stopping"):
-                        logger.info("State transitioned (from_state=running, to_state=stopping)")
+                if self.current_state == "running" and self.set_state("stopping"):
+                    logger.info("State transitioned (from_state=running, to_state=stopping)")
                 return True
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
@@ -214,11 +214,9 @@ class StateManager:
             True if checkpoint interval has elapsed, False otherwise
         """
         current_time = time.time()
-        if current_time - self.last_checkpoint >= self.checkpoint_interval:
-            return True
-        return False
+        return current_time - self.last_checkpoint >= self.checkpoint_interval
 
-    def save_checkpoint(self, checkpoint_data: Dict[str, Any]) -> Optional[str]:
+    def save_checkpoint(self, checkpoint_data: dict[str, Any]) -> str | None:
         """
         Save execution progress checkpoint
 
@@ -235,7 +233,7 @@ class StateManager:
             return None
 
         try:
-            execution_id = self.context.sync_execution_id or self.context.scan_execution_id
+            execution_id = self.context.scan_execution_id
             checkpoint_id = self.redis_handler.save_checkpoint(execution_id, checkpoint_data)
             self.last_checkpoint = time.time()
 
@@ -307,7 +305,7 @@ class StateManager:
 
             # Update Redis status
             if self.redis_handler:
-                execution_id = self.context.sync_execution_id or self.context.scan_execution_id
+                execution_id = self.context.scan_execution_id
                 self.redis_handler.update_status(
                     execution_id, final_status, "Execution stopped", {"partial_data": final_status == "stopped"}
                 )
@@ -331,7 +329,7 @@ class StateManager:
         """Check if connector supports a state"""
         return self.supported_states.get(state, False)
 
-    def get_supported_states(self) -> Dict[str, bool]:
+    def get_supported_states(self) -> dict[str, bool]:
         """Get all supported states"""
         return self.supported_states.copy()
 
