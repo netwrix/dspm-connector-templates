@@ -47,9 +47,8 @@ class RedisSignalHandler:
                 socket_keepalive=True,  # Enable keepalive without custom options
             )
             self.client.ping()
-            logger.info(f"Connected to Redis for signal handling (redis_url={self.redis_url})")
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {str(e)} (redis_url={self.redis_url})")
+            logger.error("Failed to connect to Redis", error=str(e), redis_url=self.redis_url)
             self.client = None
 
     def check_control_signal(self, execution_id: str, last_message_id: str = "0") -> dict[str, Any] | None:
@@ -88,20 +87,16 @@ class RedisSignalHandler:
             # Include the message ID for tracking
             data["_id"] = message_id
 
-            logger.info(
-                f"Control signal received (execution_id={execution_id}, action={data.get('action')}, message_id={message_id})"
-            )
-
             return data
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect on Redis errors
-            logger.warning(f"Redis error reading control signal (execution_id={execution_id}, error={str(e)})")
+            logger.warning("Redis error reading control signal", execution_id=execution_id, error=str(e))
             self._connect()
             return None
         except Exception as e:
             # Log other errors at debug level since some are expected (e.g., timeouts)
-            logger.debug(f"Error reading control signal (execution_id={execution_id}, error={str(e)})")
+            logger.debug("Error reading control signal", execution_id=execution_id, error=str(e))
             return None
 
     def save_checkpoint(self, execution_id: str, checkpoint_data: dict[str, Any]) -> str | None:
@@ -142,19 +137,15 @@ class RedisSignalHandler:
             # Trim to keep only last 10 checkpoints
             self.client.xtrim(checkpoint_stream_key, maxlen=10, approximate=True)
 
-            logger.debug(
-                f"Checkpoint saved (execution_id={execution_id}, message_id={message_id}, objects_count={checkpoint_data.get('objects_count')})"
-            )
-
             return message_id
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect on Redis errors
-            logger.warning(f"Redis error saving checkpoint (execution_id={execution_id}, error={str(e)})")
+            logger.warning("Redis error saving checkpoint", execution_id=execution_id, error=str(e))
             self._connect()
             return None
         except Exception as e:
-            logger.warning(f"Failed to save checkpoint (execution_id={execution_id}, error={str(e)})")
+            logger.warning("Failed to save checkpoint", execution_id=execution_id, error=str(e))
             return None
 
     def update_status(
@@ -193,19 +184,15 @@ class RedisSignalHandler:
             # Trim to keep only last 100 status updates
             self.client.xtrim(status_stream_key, maxlen=100, approximate=True)
 
-            logger.info(f"Status updated (execution_id={execution_id}, status={status})")
-
             return message_id
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect on Redis errors
-            logger.warning(
-                f"Redis error updating status (execution_id={execution_id}, status={status}, error={str(e)})"
-            )
+            logger.warning("Redis error updating status", execution_id=execution_id, status=status, error=str(e))
             self._connect()
             return None
         except Exception as e:
-            logger.warning(f"Failed to update status (execution_id={execution_id}, status={status}, error={str(e)})")
+            logger.warning("Failed to update status", execution_id=execution_id, status=status, error=str(e))
             return None
 
     def cleanup_streams(self, execution_id: str) -> bool:
@@ -227,26 +214,22 @@ class RedisSignalHandler:
 
         try:
             deleted = self.client.delete(*keys_to_delete)
-            logger.info(f"Streams cleaned up (execution_id={execution_id}, keys_deleted={deleted})")
             return deleted > 0
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect and retry cleanup on Redis errors
-            logger.warning(
-                f"Redis error during cleanup, attempting reconnect (execution_id={execution_id}, error={str(e)})"
-            )
+            logger.warning("Redis error during cleanup, attempting reconnect", execution_id=execution_id, error=str(e))
             self._connect()
             try:
                 deleted = self.client.delete(*keys_to_delete)
-                logger.info(f"Streams cleaned up after reconnect (execution_id={execution_id}, keys_deleted={deleted})")
                 return deleted > 0
             except Exception as retry_e:
                 logger.warning(
-                    f"Failed to cleanup streams after reconnect (execution_id={execution_id}, error={str(retry_e)})"
+                    "Failed to cleanup streams after reconnect", execution_id=execution_id, error=str(retry_e)
                 )
                 return False
         except Exception as e:
-            logger.warning(f"Failed to cleanup streams (execution_id={execution_id}, error={str(e)})")
+            logger.warning("Failed to cleanup streams", execution_id=execution_id, error=str(e))
             return False
 
     def health_check(self) -> bool:
@@ -267,7 +250,7 @@ class RedisSignalHandler:
             self.client.ping()
             return True
         except Exception as e:
-            logger.warning(f"Redis health check failed: {str(e)}")
+            logger.warning("Redis health check failed", error=str(e))
             return False
 
     def close(self):
@@ -277,7 +260,7 @@ class RedisSignalHandler:
                 self.client.close()
                 logger.info("Redis connection closed")
             except Exception as e:
-                logger.warning(f"Error closing Redis connection: {str(e)}")
+                logger.warning("Error closing Redis connection", error=str(e))
             finally:
                 self.client = None
 
@@ -327,15 +310,15 @@ class ScanControlContext:
 
             if action == "STOP":
                 self.stop_requested = True
-                logger.info(f"Stop signal received (execution_id={self.execution_id})")
+                logger.info("Stop signal received", execution_id=self.execution_id)
                 return True
 
             if action == "PAUSE":
                 self.pause_requested = True
-                logger.info(f"Pause signal received (execution_id={self.execution_id})")
+                logger.info("Pause signal received", execution_id=self.execution_id)
             elif action == "RESUME":
                 self.pause_requested = False
-                logger.info(f"Resume signal received (execution_id={self.execution_id})")
+                logger.info("Resume signal received", execution_id=self.execution_id)
                 return True
 
         return self.stop_requested

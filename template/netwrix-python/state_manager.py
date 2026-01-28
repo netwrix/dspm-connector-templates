@@ -138,11 +138,11 @@ class StateManager:
             # Update status
             self.redis_handler.update_status(execution_id, "running")
 
-            logger.info(f"State manager initialized (supported_states={self.supported_states})")
+            logger.info("State manager initialized", supported_states=self.supported_states)
             return True
 
         except Exception as e:
-            logger.error(f"Failed to initialize state manager: {e}")
+            logger.error("Failed to initialize state manager", error=str(e))
             return False
 
     def check_for_state_changes(self) -> bool:
@@ -181,7 +181,7 @@ class StateManager:
                     return False
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
-            logger.warning(f"Error checking state changes: {e}")
+            logger.warning("Error checking state changes", error=str(e))
 
         return False
 
@@ -241,11 +241,11 @@ class StateManager:
             checkpoint_id = self.redis_handler.save_checkpoint(execution_id, checkpoint_data)
             self.last_checkpoint = time.time()
 
-            logger.debug(f"Checkpoint saved (execution_id={execution_id}, checkpoint_id={checkpoint_id})")
+            logger.debug("Checkpoint saved", execution_id=execution_id, checkpoint_id=checkpoint_id)
             return checkpoint_id
 
         except Exception as e:
-            logger.warning(f"Failed to save checkpoint: {e}")
+            logger.warning("Failed to save checkpoint", error=str(e))
             return None
 
     def set_state(self, new_state: str) -> bool:
@@ -262,13 +262,13 @@ class StateManager:
             valid_transitions = self.VALID_TRANSITIONS.get(self.current_state, [])
 
             if new_state not in valid_transitions:
-                logger.warning(f"Invalid state transition (from_state={self.current_state}, to_state={new_state})")
+                logger.warning("Invalid state transition", from_state=self.current_state, to_state=new_state)
                 return False
 
             old_state = self.current_state
             self.current_state = new_state
 
-            logger.info(f"State transitioned (from_state={old_state}, to_state={new_state})")
+            logger.info("State transitioned", from_state=old_state, to_state=new_state)
 
         # Call callbacks outside lock to avoid deadlocks
         self._trigger_state_change_callbacks(old_state, new_state)
@@ -289,7 +289,7 @@ class StateManager:
             try:
                 callback(old_state, new_state)
             except Exception as e:
-                logger.error(f"Error in state change callback: {e}")
+                logger.error("Error in state change callback", error=str(e))
 
     def shutdown(self, final_status: str = "stopped") -> bool:
         """
@@ -304,7 +304,7 @@ class StateManager:
         try:
             # Transition state
             if not self.set_state(final_status):
-                logger.warning(f"Could not transition to {final_status}")
+                logger.warning("Could not transition to final state", final_status=final_status)
                 return False
 
             # Update Redis status
@@ -318,11 +318,11 @@ class StateManager:
                 self.redis_handler.cleanup_streams(execution_id)
 
             self._shutdown_event.set()
-            logger.info(f"State manager shutdown with final status: {final_status}")
+            logger.info("State manager shutdown with final status", final_status=final_status)
             return True
 
         except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+            logger.error("Error during shutdown", error=str(e))
             return False
 
     def is_shutdown(self) -> bool:
