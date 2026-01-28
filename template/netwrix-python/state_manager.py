@@ -63,11 +63,11 @@ class StateManager:
 
     # Valid state transitions
     VALID_TRANSITIONS = {
-        "running": ["stopping", "pausing", "completed", "failed", "stopped"],
+        "running": ["stopping", "pausing", "completed", "failed"],
         "stopping": ["stopped", "failed"],
         "stopped": [],
         "pausing": ["paused", "failed"],
-        "paused": ["resuming", "failed"],
+        "paused": ["resuming", "failed", "stopped"],
         "resuming": ["running", "failed"],
         "completed": [],
         "failed": [],
@@ -165,12 +165,19 @@ class StateManager:
         try:
             # Socket timeout is configured on Redis client prevent indefinite blocking if it becomes unresponsive.
             signal = self.control_context.check_for_signals()
-            if signal and self.control_context.stop_requested:
-                self.requested_state = "stop"
-                # Actually transition to stopping state
-                if self.current_state == "running" and self.set_state("stopping"):
-                    logger.info("State transitioned (from_state=running, to_state=stopping)")
-                return True
+            if signal:
+                if self.control_context.stop_requested:
+                    self.requested_state = "stop"
+                    # Actually transition to stopping state
+                    if self.set_state("stopping"):
+                        logger.info("Stop signal handled, transitioning to stopping state")
+                    return True
+                elif self.control_context.pause_requested:
+                    self.requested_state = "pause"
+                    # Actually transition to pausing state
+                    if self.set_state("pausing"):
+                        logger.info("Pause signal handled, transitioning to pausing state")
+                    return False
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
             logger.warning(f"Error checking state changes: {e}")
@@ -200,11 +207,7 @@ class StateManager:
 
         self.check_for_state_changes()
         with self._state_lock:
-            return (
-                self.requested_state == "pause"
-                and self.control_context is not None
-                and self.control_context.pause_requested
-            )
+            return self.requested_state == "pause"
 
     def should_checkpoint(self) -> bool:
         """
