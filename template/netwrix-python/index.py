@@ -645,7 +645,6 @@ class Context:
                     headers=headers,
                     timeout=30,
                 )
-
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
