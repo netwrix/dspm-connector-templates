@@ -172,7 +172,8 @@ class StateManager:
                     if self.set_state("stopping"):
                         logger.info("Stop signal handled, transitioning to stopping state")
                     return True
-                elif self.control_context.pause_requested:
+
+                if self.control_context.pause_requested:
                     self.requested_state = "pause"
                     # Actually transition to pausing state
                     if self.set_state("pausing"):

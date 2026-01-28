@@ -606,25 +606,25 @@ class Context:
     def get_prior_execution(self, scan_execution_id: str) -> dict | None:
         """
         Query Postgres scan_executions table for prior execution with same scan_execution_id.
-        
+
         Used to detect if a scan is resuming from a paused state.
-        
+
         Args:
             scan_execution_id: The execution ID to query
-            
+
         Returns:
             dict with 'status' field if found, None if not found or on error
         """
         local_run = self.run_local == "true"
-        
+
         try:
             # Query Postgres for scan execution status via app-data-query function
             query = f"SELECT id, status FROM scan_executions WHERE id = '{scan_execution_id}' LIMIT 1"
             payload = {"query": query}
-            
+
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
-            
+
             if local_run:
                 url = f"http://{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}:8080"
                 response = requests.post(
@@ -634,55 +634,45 @@ class Context:
                     timeout=30,
                 )
             else:
-                url = f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}"
+                url = (
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}"
+                )
                 response = requests.post(
                     url,
                     json=payload,
                     headers=headers,
                     timeout=30,
                 )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 if result.get("success"):
                     data = result.get("data", [])
                     if data and len(data) > 0:
                         execution_data = data[0]
-                        self.log.info( #TODO: debug
+                        self.log.info(  # TODO: debug
                             "Retrieved prior execution",
                             scan_execution_id=scan_execution_id,
-                            status=execution_data.get("status")
+                            status=execution_data.get("status"),
                         )
                         return execution_data
-                    else:
-                        self.log.info(
-                            "No prior execution found",
-                            scan_execution_id=scan_execution_id
-                        )
-                        return None
-                else:
-                    self.log.info(
-                        "Query failed",
-                        scan_execution_id=scan_execution_id,
-                        error=result.get("error", "Unknown error")
-                    )
+
+                    self.log.info("No prior execution found", scan_execution_id=scan_execution_id)
                     return None
-            else:
+
                 self.log.info(
-                    "Failed to query prior execution",
-                    status_code=response.status_code,
-                    response=response.text[:200]
+                    "Query failed", scan_execution_id=scan_execution_id, error=result.get("error", "Unknown error")
                 )
                 return None
-                
-        except Exception as e:
-            self.log.warning(
-                "Error querying prior execution",
-                scan_execution_id=scan_execution_id,
-                error=str(e)
+
+            self.log.info(
+                "Failed to query prior execution", status_code=response.status_code, response=response.text[:200]
             )
             return None
-    
+
+        except Exception as e:
+            self.log.warning("Error querying prior execution", scan_execution_id=scan_execution_id, error=str(e))
+            return None
 
 
 class ContextLogger:
