@@ -990,22 +990,7 @@ def run_as_job():
 
 def run_as_http_server():
     """Start Flask HTTP server for OpenFaaS mode."""
-    if os.getenv("DEBUG_MODE", "false").lower() == "true":
-        try:
-            import debugpy  # noqa: T100
-
-            debugpy.listen((os.getenv("DEBUG_HOST", "0.0.0.0"), int(os.getenv("DEBUG_PORT", 5678))))  # noqa: T100
-            debugpy.wait_for_client()  # noqa: T100
-        except ImportError:
-            app.logger.error("debugpy module not found, continuing without debugger")
-        except Exception as e:
-            app.logger.error(
-                f"Connection to debugger failed: {str(e)}. Ensure your debugger is configured correctly or set DEBUG_MODE to false"
-            )
-
-        app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False, use_reloader=False)
-    else:
-        serve(app, host="0.0.0.0", port=5000)
+    serve(app, host="0.0.0.0", port=5000)
 
 
 def main():
