@@ -272,7 +272,6 @@ class ScanControlContext:
                 self.stop_requested = True
                 logger.info("Stop signal received for execution: %s", self.execution_id)
                 return True
-
             if action == "PAUSE":
                 self.pause_requested = True
                 logger.info("Pause signal received for execution: %s", self.execution_id)
