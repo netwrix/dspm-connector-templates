@@ -270,6 +270,11 @@ def extract_trace_context():
     trace.set_span_in_context(ctx)
 
 
+@app.get("/health")
+def health():
+    return jsonify(status="ok")
+
+
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
@@ -383,7 +388,8 @@ def run_as_job():
 
 def run_as_http_server():
     """Start Flask HTTP server for OpenFaaS mode."""
-    serve(app, host="0.0.0.0", port=5000)
+    port = os.getenv("PORT", 5000)
+    serve(app, host="0.0.0.0", port=port)
 
 
 def main():

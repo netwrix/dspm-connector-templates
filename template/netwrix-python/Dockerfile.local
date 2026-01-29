@@ -1,9 +1,6 @@
 ARG PYTHON_VERSION=3.12
 FROM --platform=${TARGETPLATFORM:-linux/amd64} python:${PYTHON_VERSION}-alpine AS build
 
-COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
-RUN chmod +x /usr/bin/fwatchdog
-
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
 ARG DEBUG_MODE="false"
@@ -73,14 +70,15 @@ COPY --chown=app:app ${FUNCTION_DIR}/ .
 FROM build AS ship
 WORKDIR /home/app/
 
-# configure WSGI server and healthcheck
+# Configure server and healthcheck
 USER app
 
-ENV fprocess="python index.py"
-ENV cgi_headers="true"
-ENV mode="http"
-ENV upstream_url="http://127.0.0.1:5000"
+# Port for the HTTP server (Flask/Waitress)
+EXPOSE 8080
 
-HEALTHCHECK --interval=5s CMD [ -e /tmp/.lock ] || exit 1
+# Health check using wget to the /health endpoint
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
-CMD ["fwatchdog"]
+# Run the Python application directly (Flask/Waitress server)
+CMD ["python", "index.py"]
