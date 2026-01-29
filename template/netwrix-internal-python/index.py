@@ -1,8 +1,11 @@
 #!/usr/bin/env python
+import json
 import logging
 import os
 import signal
+import sys
 from collections.abc import Callable
+from datetime import UTC, datetime
 from logging.config import dictConfig
 from typing import Final
 
@@ -139,12 +142,22 @@ from function import handler  # noqa: E402
 
 
 class Event:
-    def __init__(self):
-        self.body = request.get_data()
-        self.headers = request.headers
-        self.method = request.method
-        self.query = request.args
-        self.path = request.path
+    def __init__(self, execution_mode: str = "http"):
+        if execution_mode == "http":
+            # OpenFaaS mode: read from Flask request
+            self.body = request.get_data()
+            self.headers = request.headers
+            self.method = request.method
+            self.query = request.args
+            self.path = request.path
+        else:
+            # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
+            request_data = os.getenv("REQUEST_DATA", "{}")
+            self.body = request_data.encode()
+            self.headers = {}
+            self.method = "POST"
+            self.query = {}
+            self.path = "/"
 
 
 class Context:
@@ -298,20 +311,89 @@ def handle_shutdown(signum, frame):
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 
-if __name__ == "__main__":
-    if os.getenv("DEBUG_MODE", "false").lower() == "true":
-        try:
-            import debugpy  # noqa: T100
 
-            debugpy.listen((os.getenv("DEBUG_HOST", "0.0.0.0"), int(os.getenv("DEBUG_PORT", 5678))))  # noqa: T100
-            debugpy.wait_for_client()  # noqa: T100
-        except ImportError:
-            app.logger.error("debugpy module not found, continuing without debugger")
-        except Exception as e:
-            app.logger.error(
-                f"Connection to debugger failed: {str(e)}. Ensure your debugger is configured correctly or set DEBUG_MODE to false"
-            )
+def get_execution_mode() -> str:
+    """Detect execution mode based on environment.
 
-        app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False)
+    Returns:
+        str: 'job' for connector-api job mode, 'http' for OpenFaaS HTTP mode
+    """
+    # Explicit mode override
+    if os.getenv("EXECUTION_MODE") == "job":
+        return "job"
+
+    # If REQUEST_DATA is set, assume job mode
+    if os.getenv("REQUEST_DATA"):
+        return "job"
+
+    # Default to OpenFaaS HTTP mode
+    return "http"
+
+
+def run_as_job():
+    """Execute handler once as a Kubernetes job."""
+    ctx = Context({})
+
+    ctx.log.info(
+        "Starting job execution",
+        execution_mode="job",
+    )
+
+    event = Event(execution_mode="job")
+
+    try:
+        # Run the handler
+        response = handler.handle(event, ctx)
+
+        # Determine final status
+        status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
+        success = status_code == 200
+
+        # Output result as JSON to stdout
+        result = {
+            "success": success,
+            "statusCode": status_code,
+            "body": response.get("body", {}) if isinstance(response, dict) else response,
+        }
+
+        ctx.log.info("Job execution completed", success=success)
+
+    except Exception as e:
+        ctx.log.error(
+            "Job execution failed",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+
+        result = {
+            "success": False,
+            "statusCode": 500,
+            "body": {"error": str(e)},
+        }
+
+    # Flush OpenTelemetry before exiting
+    flush_opentelemetry()
+
+    print(json.dumps(result))
+    sys.exit(0 if result["success"] else 1)
+
+
+def run_as_http_server():
+    """Start Flask HTTP server for OpenFaaS mode."""
+    serve(app, host="0.0.0.0", port=5000)
+
+
+def main():
+    """Main entry point - detect execution mode and run accordingly."""
+    execution_mode = get_execution_mode()
+
+    if execution_mode == "job":
+        # Job mode: run handler once and exit
+        run_as_job()
     else:
-        serve(app, host="0.0.0.0", port=5000)
+        # HTTP mode: start Flask server
+        run_as_http_server()
+
+
+if __name__ == "__main__":
+    main()
