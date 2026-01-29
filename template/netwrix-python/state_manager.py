@@ -115,14 +115,14 @@ class StateManager:
             # Get execution ID
             execution_id = self.context.scan_execution_id
             if not execution_id:
-                logger.warning("No execution ID available, signal monitoring disabled")
+                self.context.log.warning("No execution ID available, signal monitoring disabled")
                 return False
 
             # Initialize Redis handler
             self.redis_handler = RedisSignalHandler()
 
             if not self.redis_handler.health_check():
-                logger.warning("Redis unavailable, signal monitoring disabled")
+                self.context.log.warning("Redis unavailable, signal monitoring disabled")
                 return False
 
             # Create control context
@@ -163,13 +163,13 @@ class StateManager:
                     self.requested_state = "stop"
                     # Actually transition to stopping state
                     if self.set_state("stopping"):
-                        logger.info("Stop signal handled, transitioning to stopping state")
+                        self.context.log.info("Stop signal handled, transitioning to stopping state")
                     return True
                 if self.control_context.pause_requested:
                     self.requested_state = "pause"
                     # Actually transition to pausing state
                     if self.set_state("pausing"):
-                        logger.info("Pause signal handled, transitioning to pausing state")
+                        self.context.log.info("Pause signal handled, transitioning to pausing state")
                     return False
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
