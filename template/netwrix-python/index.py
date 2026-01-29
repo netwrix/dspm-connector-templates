@@ -42,7 +42,31 @@ dictConfig(
 SOURCE_TYPE: Final = os.getenv("SOURCE_TYPE", "internal")
 FUNCTION_TYPE: Final = os.getenv("FUNCTION_TYPE", "netwrix")
 SERVICE_NAME: Final = f"{SOURCE_TYPE}-{FUNCTION_TYPE}"
+
+# Common functions base URL - defaults to access-analyzer namespace K8s services
+# For local development, set to appropriate docker-compose service names
+COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "access-analyzer")
+
 app = Flask(SERVICE_NAME)
+
+
+def get_service_url(service_name: str, port: int = 80) -> str:
+    """
+    Get the URL for a common function service.
+
+    In Kubernetes, services are accessible via their DNS name within the cluster.
+    Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
+
+    For local development (RUN_LOCAL=true), uses simple service name with port 8080.
+    """
+    local_run = os.getenv("RUN_LOCAL", "false") == "true"
+
+    if local_run:
+        # Local docker-compose: service names are directly resolvable
+        return f"http://{service_name}:8080"
+    else:
+        # Kubernetes: use fully qualified DNS name
+        return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
 
 
 def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
@@ -168,14 +192,17 @@ class BatchManager:
                 current_time = datetime.now(UTC).isoformat()
                 object_data = orjson.dumps(obj)[1:]  # Remove the first brace
 
-                # For scan operations
+                # For scan operations - ensure scan_id and scan_execution_id are set
+                scan_id = self.context.scan_id or ""
+                scan_execution_id = self.context.scan_execution_id or ""
+
                 enhanced_object = (
                     b"{"
                     + b'"scan_id":"'
-                    + self.context.scan_id.encode("utf-8")
+                    + scan_id.encode("utf-8")
                     + b'",'
                     + b'"scan_execution_id":"'
-                    + self.context.scan_execution_id.encode("utf-8")
+                    + scan_execution_id.encode("utf-8")
                     + b'",'
                     + b'"scanned_at":"'
                     + current_time.encode("utf-8")
@@ -199,7 +226,6 @@ class BatchManager:
     def _flush_internal(self) -> tuple[bool, str | None] | None:
         """Internal flush method - assumes lock is already held"""
         success, error = True, None
-        local_run = self.context.run_local == "true"
 
         if len(self.rows) == 1:
             return success, error
@@ -222,21 +248,16 @@ class BatchManager:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.context.get_caller_headers()}
 
-            if local_run:
-                ## call to local docker container function
-                response = requests.post(
-                    f"http://{os.getenv('SAVE_DATA_FUNCTION', 'data-ingestion')}:8080",
-                    data=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/async-function/{os.getenv('SAVE_DATA_FUNCTION')}",
-                    data=payload,
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for data-ingestion
+            service_name = os.getenv("SAVE_DATA_FUNCTION", "data-ingestion")
+            url = get_service_url(service_name)
+
+            response = requests.post(
+                url,
+                data=payload,
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code in (202, 200):
                 if self.increment_completed_objects > 0:
@@ -269,7 +290,7 @@ class BatchManager:
 class Event:
     def __init__(self, execution_mode: str = "http"):
         if execution_mode == "http":
-            # OpenFaaS mode: read from Flask request
+            # HTTP mode: read from Flask request
             self.body = request.get_data()
             self.headers = request.headers
             self.method = request.method
@@ -338,26 +359,20 @@ class Context:
         if not self.scan_id:
             raise ValueError("scan_id must be set to retrieve connector state")
 
-        local_run = self.run_local == "true"
-
         try:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
-            if local_run:
-                response = requests.get(
-                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
-                    params={"scanId": self.scan_id},
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                response = requests.get(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
-                    params={"scanId": self.scan_id},
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for connector-state
+            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+            url = get_service_url(service_name)
+
+            response = requests.get(
+                url,
+                params={"scanId": self.scan_id},
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -388,11 +403,9 @@ class Context:
         if not self.scan_id:
             raise ValueError("scan_id must be set to delete connector state")
 
-        local_run = self.run_local == "true"
-
         try:
             # Build params with scanId and optional name parameters
-            params = {"scanId": self.scan_id}
+            params: dict[str, str | list[str]] = {"scanId": self.scan_id}
             if names:
                 # Add multiple name parameters to the query string
                 params["name"] = names
@@ -400,20 +413,16 @@ class Context:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
-            if local_run:
-                response = requests.delete(
-                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
-                    params=params,
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                response = requests.delete(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
-                    params=params,
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for connector-state
+            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+            url = get_service_url(service_name)
+
+            response = requests.delete(
+                url,
+                params=params,
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -452,28 +461,22 @@ class Context:
         if not isinstance(data, dict):
             raise ValueError("data must be a dictionary")
 
-        local_run = self.run_local == "true"
-
         try:
             payload = {"scanId": self.scan_id, "data": data}
 
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
-            if local_run:
-                response = requests.post(
-                    f"http://{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}:8080",
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                response = requests.post(
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('CONNECTOR_STATE_FUNCTION', 'connector-state')}",
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for connector-state
+            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+            url = get_service_url(service_name)
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -531,8 +534,6 @@ class Context:
         increment_completed_objects=None,
         completed_at=None,
     ):
-        local_run = self.run_local == "true"
-
         try:
             # Build payload with only provided arguments
             payload = {"executionId": self.scan_execution_id}
@@ -562,25 +563,17 @@ class Context:
             # Log the update request details
             self.log.info(f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}")
 
-            if local_run:
-                url = f"http://{os.getenv('APP_UPDATE_EXECUTION_FUNCTION', 'app-update-execution')}:8080"
-                self.log.info(f"Sending update_execution to local URL: {url}")
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                # IMPORTANT: Use synchronous function call for execution updates to ensure they're processed immediately
-                url = f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_UPDATE_EXECUTION_FUNCTION', 'app-update-execution')}"
-                self.log.info(f"Sending update_execution to OpenFaaS URL (SYNC): {url}")
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for app-update-execution
+            service_name = os.getenv("APP_UPDATE_EXECUTION_FUNCTION", "app-update-execution")
+            url = get_service_url(service_name)
+            self.log.info(f"Sending update_execution to URL: {url}")
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code in (202, 200):
                 self.log.info(
@@ -649,14 +642,12 @@ class ContextLogger:
 def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     """Read secrets from available mount paths.
 
-    Supports both OpenFaaS (/var/openfaas/secrets/) and connector-api (/var/secrets/) paths.
-    Both use the same flat file structure: <base-path>/<secret-name> containing the raw value.
+    Secrets are mounted as files at /var/secrets/<secret-name> containing the raw value.
     """
     secrets_dict: dict[str, str] = {}
 
-    # Both paths use flat file structure (not directories)
-    connector_api_path = "/var/secrets/"
-    openfaas_path = "/var/openfaas/secrets/"
+    # Secrets path for Kubernetes secrets mounted as files
+    secrets_path = "/var/secrets/"
 
     secret_mappings = os.getenv("SECRET_MAPPINGS", "").split(",")
     secret_mappings_dict = {
@@ -666,34 +657,19 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     for key, secret_name in secret_mappings_dict.items():
         secret_value = None
 
-        # Try connector-api path first: /var/secrets/<secret-name>
-        connector_api_secret_path = os.path.join(connector_api_path, secret_name)
-        if os.path.isfile(connector_api_secret_path):
+        # Try secrets path: /var/secrets/<secret-name>
+        secret_file_path = os.path.join(secrets_path, secret_name)
+        if os.path.isfile(secret_file_path):
             try:
-                with open(connector_api_secret_path) as f:
+                with open(secret_file_path) as f:
                     secret_value = f.read().strip()
             except Exception as e:
                 context.log.error(
-                    "Error reading secret file from connector-api path",
-                    filename=connector_api_secret_path,
+                    "Error reading secret file",
+                    filename=secret_file_path,
                     error=str(e),
                     error_type=type(e).__name__,
                 )
-
-        # Fallback to OpenFaaS path: /var/openfaas/secrets/<secret-name>
-        if secret_value is None:
-            openfaas_secret_path = os.path.join(openfaas_path, secret_name)
-            if os.path.isfile(openfaas_secret_path):
-                try:
-                    with open(openfaas_secret_path) as f:
-                        secret_value = f.read().strip()
-                except Exception as e:
-                    context.log.error(
-                        "Error reading secret file from OpenFaaS path",
-                        filename=openfaas_secret_path,
-                        error=str(e),
-                        error_type=type(e).__name__,
-                    )
 
         if secret_value is not None:
             secrets_dict[key] = secret_value
@@ -768,7 +744,7 @@ def call_handler(path: str):
         try:
             local_run = context.run_local == "true"
 
-            # Load secrets from OpenFaaS secret files
+            # Load secrets from secret files
             context.secrets = get_secrets(context, local_run)
 
             request_data = json.loads(event.body)
@@ -864,7 +840,7 @@ def get_execution_mode() -> str:
     """Detect execution mode based on environment.
 
     Returns:
-        str: 'job' for connector-api job mode, 'http' for OpenFaaS HTTP mode
+        str: 'job' for Kubernetes job mode, 'http' for HTTP server mode
     """
     # Explicit mode override
     if os.getenv("EXECUTION_MODE") == "job":
@@ -874,7 +850,7 @@ def get_execution_mode() -> str:
     if os.getenv("REQUEST_DATA"):
         return "job"
 
-    # Default to OpenFaaS HTTP mode
+    # Default to HTTP server mode
     return "http"
 
 
@@ -989,7 +965,7 @@ def run_as_job():
 
 
 def run_as_http_server():
-    """Start Flask HTTP server for OpenFaaS mode."""
+    """Start Flask HTTP server."""
     if os.getenv("DEBUG_MODE", "false").lower() == "true":
         try:
             import debugpy  # noqa: T100
@@ -1003,9 +979,9 @@ def run_as_http_server():
                 f"Connection to debugger failed: {str(e)}. Ensure your debugger is configured correctly or set DEBUG_MODE to false"
             )
 
-        app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False, use_reloader=False)
+        app.run(host="0.0.0.0", port=8080, debug=True, use_debugger=False, use_reloader=False)
     else:
-        serve(app, host="0.0.0.0", port=5000)
+        serve(app, host="0.0.0.0", port=8080)
 
 
 def main():

@@ -256,6 +256,11 @@ def extract_trace_context():
     trace.set_span_in_context(ctx)
 
 
+@app.get("/health")
+def health():
+    return jsonify(status="ok")
+
+
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
@@ -314,6 +319,6 @@ if __name__ == "__main__":
                 f"Connection to debugger failed: {str(e)}. Ensure your debugger is configured correctly or set DEBUG_MODE to false"
             )
 
-        app.run(host="0.0.0.0", port=5000, debug=True, use_debugger=False)
+        app.run(host="0.0.0.0", port=8080, debug=True, use_debugger=False, use_reloader=False)
     else:
-        serve(app, host="0.0.0.0", port=5000)
+        serve(app, host="0.0.0.0", port=8080)
