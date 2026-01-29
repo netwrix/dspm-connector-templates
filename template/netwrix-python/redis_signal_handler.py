@@ -4,10 +4,8 @@ Redis Signal Handler for graceful stop/pause/resume functionality
 Monitors Redis Streams for control signals from the Core API
 """
 
-import json
 import logging
 import os
-import time
 from datetime import datetime
 from typing import Any
 
@@ -48,7 +46,7 @@ class RedisSignalHandler:
             )
             self.client.ping()
         except Exception as e:
-            logger.error("Failed to connect to Redis", error=str(e), redis_url=self.redis_url)
+            logger.error(f"Failed to connect to Redis: {str(e)} (redis_url={self.redis_url})")
             self.client = None
 
     def check_control_signal(self, execution_id: str, last_message_id: str = "0") -> dict[str, Any] | None:
@@ -89,67 +87,21 @@ class RedisSignalHandler:
 
             return data
 
+        except redis.exceptions.TimeoutError:
+            self._connect()
+            return None
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect on Redis errors
-            logger.warning("Redis error reading control signal", execution_id=execution_id, error=str(e))
+            logger.warning(f"Redis error reading control signal (execution_id={execution_id}, error={str(e)})")
             self._connect()
             return None
         except Exception as e:
             # Log other errors at debug level since some are expected (e.g., timeouts)
-            logger.debug("Error reading control signal", execution_id=execution_id, error=str(e))
-            return None
-
-    def save_checkpoint(self, execution_id: str, checkpoint_data: dict[str, Any]) -> str | None:
-        """
-        Save checkpoint for pause/resume functionality
-
-        Args:
-            execution_id: The scan execution ID
-            checkpoint_data: Dictionary containing checkpoint data
-                - state: current scanning state
-                - scanned_paths: set of completed paths
-                - current_path: path being processed
-                - objects_count: number of objects scanned
-                - failed_paths: list of failed paths
-                - worker_states: individual worker progress
-
-        Returns:
-            Message ID if successful, None otherwise
-        """
-        try:
-            checkpoint_stream_key = f"scan:checkpoint:{execution_id}"
-
-            message_data = {
-                "timestamp": datetime.utcnow().isoformat(),
-                "state": json.dumps(checkpoint_data.get("state", {})),
-                "scanned_paths": json.dumps(list(checkpoint_data.get("scanned_paths", []))),
-                "current_path": checkpoint_data.get("current_path", ""),
-                "objects_count": str(checkpoint_data.get("objects_count", 0)),
-                "failed_paths": json.dumps(checkpoint_data.get("failed_paths", [])),
-                "worker_states": json.dumps(checkpoint_data.get("worker_states", {})),
-            }
-
-            message_id = self.client.xadd(checkpoint_stream_key, message_data)
-
-            # Set expiration
-            self.client.expire(checkpoint_stream_key, self.CONTROL_STREAM_TTL)
-
-            # Trim to keep only last 10 checkpoints
-            self.client.xtrim(checkpoint_stream_key, maxlen=10, approximate=True)
-
-            return message_id
-
-        except redis.exceptions.RedisError as e:
-            # Attempt to reconnect on Redis errors
-            logger.warning("Redis error saving checkpoint", execution_id=execution_id, error=str(e))
-            self._connect()
-            return None
-        except Exception as e:
-            logger.warning("Failed to save checkpoint", execution_id=execution_id, error=str(e))
+            logger.debug(f"Error reading control signal (execution_id={execution_id}, error={str(e)})")
             return None
 
     def update_status(
-        self, execution_id: str, status: str, message: str = "", metadata: dict[str, Any] = None
+        self, execution_id: str, status: str, message: str = "", metadata: dict[str, Any] | None = None
     ) -> str | None:
         """
         Update status in Redis Stream for monitoring
@@ -184,15 +136,19 @@ class RedisSignalHandler:
             # Trim to keep only last 100 status updates
             self.client.xtrim(status_stream_key, maxlen=100, approximate=True)
 
+            logger.info(f"Status updated (execution_id={execution_id}, status={status})")
+
             return message_id
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect on Redis errors
-            logger.warning("Redis error updating status", execution_id=execution_id, status=status, error=str(e))
+            logger.warning(
+                f"Redis error updating status (execution_id={execution_id}, status={status}, error={str(e)})"
+            )
             self._connect()
             return None
         except Exception as e:
-            logger.warning("Failed to update status", execution_id=execution_id, status=status, error=str(e))
+            logger.warning(f"Failed to update status (execution_id={execution_id}, status={status}, error={str(e)})")
             return None
 
     def cleanup_streams(self, execution_id: str) -> bool:
@@ -208,28 +164,31 @@ class RedisSignalHandler:
         """
         keys_to_delete = [
             f"scan:control:{execution_id}",
-            f"scan:checkpoint:{execution_id}",
             f"scan:status:{execution_id}",
         ]
 
         try:
             deleted = self.client.delete(*keys_to_delete)
+            logger.info(f"Streams cleaned up (execution_id={execution_id}, keys_deleted={deleted})")
             return deleted > 0
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect and retry cleanup on Redis errors
-            logger.warning("Redis error during cleanup, attempting reconnect", execution_id=execution_id, error=str(e))
+            logger.warning(
+                f"Redis error during cleanup, attempting reconnect (execution_id={execution_id}, error={str(e)})"
+            )
             self._connect()
             try:
                 deleted = self.client.delete(*keys_to_delete)
+                logger.info(f"Streams cleaned up after reconnect (execution_id={execution_id}, keys_deleted={deleted})")
                 return deleted > 0
             except Exception as retry_e:
                 logger.warning(
-                    "Failed to cleanup streams after reconnect", execution_id=execution_id, error=str(retry_e)
+                    f"Failed to cleanup streams after reconnect (execution_id={execution_id}, error={str(retry_e)})"
                 )
                 return False
         except Exception as e:
-            logger.warning("Failed to cleanup streams", execution_id=execution_id, error=str(e))
+            logger.warning(f"Failed to cleanup streams (execution_id={execution_id}, error={str(e)})")
             return False
 
     def health_check(self) -> bool:
@@ -250,7 +209,7 @@ class RedisSignalHandler:
             self.client.ping()
             return True
         except Exception as e:
-            logger.warning("Redis health check failed", error=str(e))
+            logger.warning(f"Redis health check failed: {str(e)}")
             return False
 
     def close(self):
@@ -260,7 +219,7 @@ class RedisSignalHandler:
                 self.client.close()
                 logger.info("Redis connection closed")
             except Exception as e:
-                logger.warning("Error closing Redis connection", error=str(e))
+                logger.warning(f"Error closing Redis connection: {str(e)}")
             finally:
                 self.client = None
 
@@ -276,7 +235,7 @@ class RedisSignalHandler:
 class ScanControlContext:
     """
     Context for managing scan control state
-    Tracks stop signals and checkpoint intervals
+    Tracks stop and pause signals
     """
 
     def __init__(self, execution_id: str, redis_handler: RedisSignalHandler):
@@ -292,8 +251,6 @@ class ScanControlContext:
         self.stop_requested = False
         self.pause_requested = False
         self.last_signal_id = "0"
-        self.last_checkpoint_time = time.time()
-        self.checkpoint_interval = 60  # seconds
 
     def check_for_signals(self) -> bool:
         """
@@ -312,30 +269,16 @@ class ScanControlContext:
                 self.stop_requested = True
                 logger.info("Stop signal received", execution_id=self.execution_id)
                 return True
-
             if action == "PAUSE":
                 self.pause_requested = True
                 logger.info("Pause signal received", execution_id=self.execution_id)
-            elif action == "RESUME":
+                return True
+            if action == "RESUME":
                 self.pause_requested = False
                 logger.info("Resume signal received", execution_id=self.execution_id)
                 return True
 
         return self.stop_requested
-
-    def should_checkpoint(self) -> bool:
-        """
-        Check if it's time to save a checkpoint
-
-        Returns:
-            True if checkpoint interval has elapsed, False otherwise
-        """
-        elapsed = time.time() - self.last_checkpoint_time
-        return elapsed >= self.checkpoint_interval
-
-    def update_checkpoint_time(self):
-        """Update the last checkpoint timestamp"""
-        self.last_checkpoint_time = time.time()
 
     def should_stop(self) -> bool:
         """

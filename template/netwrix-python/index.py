@@ -656,15 +656,12 @@ class Context:
                             status=execution_data.get("status"),
                         )
                         return execution_data
-
                     self.log.info("No prior execution found", scan_execution_id=scan_execution_id)
                     return None
-
                 self.log.info(
                     "Query failed", scan_execution_id=scan_execution_id, error=result.get("error", "Unknown error")
                 )
                 return None
-
             self.log.info(
                 "Failed to query prior execution", status_code=response.status_code, response=response.text[:200]
             )
