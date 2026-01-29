@@ -24,9 +24,12 @@ class RedisSignalHandler:
         Initialize Redis connection for signal handling
 
         Args:
-            redis_url: Redis connection URL (default from environment)
+            redis_url: Redis connection URL (default from environment REDIS_URL)
+                      Must be provided either as argument or via REDIS_URL environment variable
         """
-        self.redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6379")
+        self.redis_url = redis_url or os.environ.get("REDIS_URL")
+        if not self.redis_url:
+            logger.error("Redis URL not provided: pass redis_url argument or set REDIS_URL environment variable")
         self.client = None
         self._connect()
 
