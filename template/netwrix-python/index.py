@@ -50,7 +50,7 @@ COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "acc
 app = Flask(SERVICE_NAME)
 
 
-def get_service_url(service_name: str, port: int = 80) -> str:
+def get_service_url(service_name: str, port: int = 80, use_async: bool = False) -> str:
     """
     Get the URL for a common function service.
 
@@ -59,7 +59,13 @@ def get_service_url(service_name: str, port: int = 80) -> str:
     2. Kubernetes with USE_OPENFAAS_GATEWAY=false (default): uses FQDN
        Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
     3. OpenFaaS (USE_OPENFAAS_GATEWAY=true): uses OpenFaaS gateway
-       Format: http://<gateway>/function/<service-name>
+       Format: http://<gateway>/function/<service-name> or
+               http://<gateway>/async-function/<service-name> (if use_async=True)
+
+    Args:
+        service_name: Name of the service to call
+        port: Port number for Kubernetes FQDN (default: 80)
+        use_async: If True and using OpenFaaS, uses async-function endpoint instead of function
     """
     local_run = os.getenv("RUN_LOCAL", "false") == "true"
     use_openfaas = os.getenv("USE_OPENFAAS_GATEWAY", "false") == "true"
@@ -69,9 +75,10 @@ def get_service_url(service_name: str, port: int = 80) -> str:
         return f"http://{service_name}:8080"
 
     if use_openfaas:
-        # OpenFaaS: use gateway URL
+        # OpenFaaS: use gateway URL with async-function for fire-and-forget calls
         openfaas_gateway = os.getenv("OPENFAAS_GATEWAY", "http://gateway.openfaas:8080")
-        return f"{openfaas_gateway}/function/{service_name}"
+        endpoint = "async-function" if use_async else "function"
+        return f"{openfaas_gateway}/{endpoint}/{service_name}"
 
     # Kubernetes: use fully qualified DNS name
     return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
@@ -256,9 +263,9 @@ class BatchManager:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.context.get_caller_headers()}
 
-            # Get service URL for data-ingestion
+            # Get service URL for data-ingestion (use async for OpenFaaS fire-and-forget)
             service_name = os.getenv("SAVE_DATA_FUNCTION", "data-ingestion")
-            url = get_service_url(service_name)
+            url = get_service_url(service_name, use_async=True)
 
             response = requests.post(
                 url,
