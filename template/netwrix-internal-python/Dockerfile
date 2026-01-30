@@ -69,14 +69,15 @@ WORKDIR /home/app/
 # Configure server and healthcheck
 USER app
 
-ENV SERVICE_NAME="${SERVICE_NAME}"
+ENV SERVICE_NAME="${SERVICE_NAME}" \
+    PORT=8080
 
 # Port for the HTTP server (Flask/Waitress)
 EXPOSE 8080
 
-# Health check using wget to the /health endpoint
+# Health check using wget to the /health endpoint (uses PORT env var)
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
 
 # Run the Python application directly (Flask/Waitress server)
 CMD ["python", "index.py"]
