@@ -54,16 +54,25 @@ def get_service_url(service_name: str, port: int = 80) -> str:
     """
     Get the URL for a common function service.
 
-    In Kubernetes, services are accessible via their DNS name within the cluster.
-    Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
-
-    For local development (RUN_LOCAL=true), uses simple service name with port 8080.
+    Supports three deployment modes:
+    1. Local development (RUN_LOCAL=true): uses simple service name with port 8080
+    2. Kubernetes with USE_OPENFAAS_GATEWAY=false (default): uses FQDN
+       Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
+    3. OpenFaaS (USE_OPENFAAS_GATEWAY=true): uses OpenFaaS gateway
+       Format: http://<gateway>/function/<service-name>
     """
     local_run = os.getenv("RUN_LOCAL", "false") == "true"
+    use_openfaas = os.getenv("USE_OPENFAAS_GATEWAY", "false") == "true"
 
     if local_run:
         # Local docker-compose: service names are directly resolvable
         return f"http://{service_name}:8080"
+
+    if use_openfaas:
+        # OpenFaaS: use gateway URL
+        openfaas_gateway = os.getenv("OPENFAAS_GATEWAY", "http://gateway.openfaas:8080")
+        return f"{openfaas_gateway}/function/{service_name}"
+
     # Kubernetes: use fully qualified DNS name
     return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
 
