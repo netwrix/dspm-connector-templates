@@ -641,12 +641,14 @@ class ContextLogger:
 def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     """Read secrets from available mount paths.
 
-    Secrets are mounted as files at /var/secrets/<secret-name> containing the raw value.
+    Supports both OpenFaaS (/var/openfaas/secrets/) and connector-api (/var/secrets/) paths.
+    Both use the same flat file structure: <base-path>/<secret-name> containing the raw value.
     """
     secrets_dict: dict[str, str] = {}
 
-    # Secrets path for Kubernetes secrets mounted as files
-    secrets_path = "/var/secrets/"
+    # Both paths use flat file structure (not directories)
+    connector_api_path = "/var/secrets/"
+    openfaas_path = "/var/openfaas/secrets/"
 
     secret_mappings = os.getenv("SECRET_MAPPINGS", "").split(",")
     secret_mappings_dict = {
@@ -656,8 +658,8 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     for key, secret_name in secret_mappings_dict.items():
         secret_value = None
 
-        # Try secrets path: /var/secrets/<secret-name>
-        secret_file_path = os.path.join(secrets_path, secret_name)
+        # Try connector-api path first: /var/secrets/<secret-name>
+        secret_file_path = os.path.join(connector_api_path, secret_name)
         if os.path.isfile(secret_file_path):
             try:
                 with open(secret_file_path) as f:
@@ -669,6 +671,21 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
                     error=str(e),
                     error_type=type(e).__name__,
                 )
+
+        # Fallback to OpenFaaS path: /var/openfaas/secrets/<secret-name>
+        if secret_value is None:
+            secret_file_path = os.path.join(openfaas_path, secret_name)
+            if os.path.isfile(secret_file_path):
+                try:
+                    with open(secret_file_path) as f:
+                        secret_value = f.read().strip()
+                except Exception as e:
+                    context.log.error(
+                        "Error reading secret file",
+                        filename=secret_file_path,
+                        error=str(e),
+                        error_type=type(e).__name__,
+                    )
 
         if secret_value is not None:
             secrets_dict[key] = secret_value
@@ -966,7 +983,7 @@ def run_as_job():
 def run_as_http_server():
     """Start Flask HTTP server for OpenFaaS mode."""
     port = os.getenv("PORT", 5000)
-    serve(app, host="0.0.0.0", port=5000)
+    serve(app, host="0.0.0.0", port=port)
 
 
 def main():
