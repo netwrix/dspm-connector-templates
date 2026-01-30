@@ -167,6 +167,7 @@ class Context:
         self.meter = meter
         self.log = ContextLogger(self)
         self.caller_attributes = caller_attributes
+        self.execution_mode = "http"
 
 
 class ContextLogger:
@@ -338,6 +339,8 @@ def run_as_job():
         "Starting job execution",
         execution_mode="job",
     )
+
+    ctx.execution_mode = "job"
 
     event = Event(execution_mode="job")
 
