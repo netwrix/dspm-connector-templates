@@ -1,6 +1,10 @@
 ARG PYTHON_VERSION=3.12
 FROM --platform=${TARGETPLATFORM:-linux/amd64} python:${PYTHON_VERSION}-slim-bookworm AS build
 
+# Copy OpenFaaS watchdog for backward compatibility
+COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
+RUN chmod +x /usr/bin/fwatchdog
+
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE="ca-certificates libicu72 libssl3 curl gss-ntlmssp libsasl2-modules-gssapi-mit"
 ARG DEBUG_MODE="false"
@@ -104,12 +108,19 @@ WORKDIR /home/app/
 # Configure server and healthcheck
 USER app
 
+# OpenFaaS watchdog environment variables (for backward compatibility)
+ENV fprocess="python index.py"
+ENV cgi_headers="true"
+ENV mode="http"
+ENV upstream_url="http://127.0.0.1:5000"
+
 # Port for the HTTP server (Flask/Waitress)
 EXPOSE 8080
 
-# Health check using curl to the /health endpoint
+# Health check - supports both OpenFaaS and direct modes
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
     CMD curl --fail http://localhost:8080/health || exit 1
 
-# Run the Python application directly (Flask/Waitress server)
-CMD ["python", "index.py"]
+# Default to fwatchdog for OpenFaaS compatibility
+# Can be overridden to "python index.py" for direct execution
+CMD ["fwatchdog"]
