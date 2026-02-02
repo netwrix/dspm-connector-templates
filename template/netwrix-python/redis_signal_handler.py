@@ -145,9 +145,7 @@ class RedisSignalHandler:
 
         except redis.exceptions.RedisError as e:
             # Attempt to reconnect on Redis errors
-            logger.warning(
-                "Redis error updating status (execution_id=%s, status=%s): %s", execution_id, status, str(e)
-            )
+            logger.warning("Redis error updating status (execution_id=%s, status=%s): %s", execution_id, status, str(e))
             self._connect()
             return None
         except Exception as e:
@@ -183,7 +181,9 @@ class RedisSignalHandler:
             self._connect()
             try:
                 deleted = self.client.delete(*keys_to_delete)
-                logger.info("Streams cleaned up after reconnect (execution_id=%s, keys_deleted=%s)", execution_id, deleted)
+                logger.info(
+                    "Streams cleaned up after reconnect (execution_id=%s, keys_deleted=%s)", execution_id, deleted
+                )
                 return deleted > 0
             except Exception as retry_e:
                 logger.warning(

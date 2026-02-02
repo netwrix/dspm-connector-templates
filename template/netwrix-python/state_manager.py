@@ -32,7 +32,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import traceback
 
 # Import here to allow for easier mocking in tests
 import threading
