@@ -24,9 +24,7 @@ namespace function
             var configuration = builder.Configuration;
 
             // Configure OpenTelemetry
-            var sourceType = Environment.GetEnvironmentVariable("SOURCE_TYPE") ?? "internal";
-            var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
-            var serviceName = $"{sourceType}-{functionType}";
+            var serviceName = Environment.GetEnvironmentVariable("SERVICE_NAME") ?? "netwrix-internal-csharp";
             var otelEnabled = Environment.GetEnvironmentVariable("OTEL_ENABLED")?.ToLowerInvariant() != "false";
             var otelEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
                 ?? "http://otel-collector.access-analyzer.svc.cluster.local:4318";
@@ -55,7 +53,15 @@ namespace function
                     {
                         tracing
                             .AddSource(serviceName)
-                            .AddAspNetCoreInstrumentation()
+                            .AddAspNetCoreInstrumentation(options =>
+                            {
+                                options.Filter = (httpContext) =>
+                                {
+                                    // Don't instrument health check endpoints
+                                    var path = httpContext.Request.Path.Value;
+                                    return path != "/health" && path != "/healthz" && path != "/ready";
+                                };
+                            })
                             .AddHttpClientInstrumentation()
                             .AddOtlpExporter(options =>
                             {
@@ -93,6 +99,18 @@ namespace function
             {
                 builder.Logging.AddConsole();
             }
+
+            // Set minimum log level and filter out noisy logs
+            builder.Logging.SetMinimumLevel(LogLevel.Information);
+
+            // Filter out noisy ASP.NET Core infrastructure logs
+            builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning);
+
+            // Allow function-specific logs at Information level
+            builder.Logging.AddFilter("function", LogLevel.Information);
 
             // Register ActivitySource for DI
             builder.Services.AddSingleton(activitySource);
