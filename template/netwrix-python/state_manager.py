@@ -32,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import traceback
 
 # Import here to allow for easier mocking in tests
 import threading
@@ -115,14 +116,14 @@ class StateManager:
             # Get execution ID
             execution_id = self.context.scan_execution_id
             if not execution_id:
-                self.context.log.warning("No execution ID available, signal monitoring disabled")
+                logger.warning("No execution ID available, signal monitoring disabled")
                 return False
 
             # Initialize Redis handler
             self.redis_handler = RedisSignalHandler()
 
             if not self.redis_handler.health_check():
-                self.context.log.warning("Redis unavailable, signal monitoring disabled")
+                logger.warning("Redis unavailable, signal monitoring disabled")
                 return False
 
             # Create control context
@@ -131,11 +132,11 @@ class StateManager:
             # Update status
             self.redis_handler.update_status(execution_id, "running")
 
-            self.context.log.info("State manager initialized", supported_states=self.supported_states)
+            logger.info("State manager initialized successfully")
             return True
 
         except Exception as e:
-            self.context.log.error("Failed to initialize state manager", error=str(e), error_type=type(e).__name__)
+            logger.error("Failed to initialize state manager: %s (%s)", str(e), type(e).__name__)
             return False
 
     def check_for_state_changes(self) -> bool:
@@ -163,17 +164,17 @@ class StateManager:
                     self.requested_state = "stop"
                     # Actually transition to stopping state
                     if self.set_state("stopping"):
-                        self.context.log.info("Stop signal handled, transitioning to stopping state")
+                        logger.info("Stop signal handled, transitioning to stopping state")
                     return True
                 if self.control_context.pause_requested:
                     self.requested_state = "pause"
                     # Actually transition to pausing state
                     if self.set_state("pausing"):
-                        self.context.log.info("Pause signal handled, transitioning to pausing state")
+                        logger.info("Pause signal handled, transitioning to pausing state")
                     return False
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
-            self.context.log.warning("Error checking state changes", error=str(e), error_type=type(e).__name__)
+            logger.warning("Error checking state changes: %s (%s)", str(e), type(e).__name__)
 
         return False
 
@@ -184,8 +185,8 @@ class StateManager:
         Returns:
             True if stop was requested, False otherwise
         """
-        self.context.log.info("should_stop?")
         if not self.supported_states.get("stop", False):
+            logger.info("stop not supported")
             return False
 
         self.check_for_state_changes()
@@ -199,8 +200,8 @@ class StateManager:
         Returns:
             True if pause was requested and supported, False otherwise
         """
-        self.context.log.info("should_pause?")
         if not self.supported_states.get("pause", False):
+            logger.info("pause not supported")
             return False
 
         self.check_for_state_changes()
@@ -224,13 +225,13 @@ class StateManager:
             valid_transitions = self.VALID_TRANSITIONS.get(self.current_state, [])
 
             if new_state not in valid_transitions:
-                self.context.log.warning("Invalid state transition", from_state=self.current_state, to_state=new_state)
+                logger.warning("Invalid state transition from %s to %s", self.current_state, new_state)
                 return False
 
             old_state = self.current_state
             self.current_state = new_state
 
-            self.context.log.info("State transitioned", from_state=old_state, to_state=new_state)
+            logger.info("State transitioned from %s to %s", old_state, new_state)
 
         # Call callbacks outside lock to avoid deadlocks
         self._trigger_state_change_callbacks(old_state, new_state)
@@ -251,7 +252,7 @@ class StateManager:
             try:
                 callback(old_state, new_state)
             except Exception as e:
-                self.context.log.error("Error in state change callback", error=str(e), error_type=type(e).__name__)
+                logger.error("Error in state change callback: %s (%s)", str(e), type(e).__name__)
 
     def shutdown(self, final_status: str = "stopped") -> bool:
         """
@@ -266,7 +267,7 @@ class StateManager:
         try:
             # Transition state
             if not self.set_state(final_status):
-                self.context.log.warning("Could not transition to final state", final_status=final_status)
+                logger.warning("Could not transition to final state: %s", final_status)
                 return False
 
             # Update Redis status
@@ -280,11 +281,11 @@ class StateManager:
                 self.redis_handler.cleanup_streams(execution_id)
 
             self._shutdown_event.set()
-            self.context.log.info("State manager shutdown", final_status=final_status)
+            logger.info("State manager shutdown with status: %s", final_status)
             return True
 
         except Exception as e:
-            self.context.log.error("Error during shutdown", error=str(e), error_type=type(e).__name__)
+            logger.error("Error during shutdown: %s (%s)", str(e), type(e).__name__)
             return False
 
     def is_shutdown(self) -> bool:
