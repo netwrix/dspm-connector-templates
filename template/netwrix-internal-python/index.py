@@ -11,7 +11,8 @@ from typing import Final
 
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
-from opentelemetry.propagate import extract
+from opentelemetry.propagate import extract, inject
+from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
 dictConfig(
@@ -169,6 +170,25 @@ class Context:
         self.caller_attributes = caller_attributes
         self.execution_mode = "http"
 
+    def get_propagation_headers(self) -> dict:
+        """
+        Get headers with trace context propagation for calling other services.
+        This ensures the current trace/span is propagated to downstream services.
+
+        Returns:
+            dict: Headers with trace context (traceparent, tracestate) and caller attributes
+        """
+        headers = {
+            "Scan-Id": self.caller_attributes.get("scan_id", ""),
+            "Scan-Execution-Id": self.caller_attributes.get("scan_execution_id", ""),
+        }
+
+        # Inject current trace context into headers for propagation
+        # This is especially important for sensitive-data-scan which creates its own spans
+        inject(headers)
+
+        return headers
+
 
 class ContextLogger:
     def __init__(self, context: Context):
@@ -287,8 +307,6 @@ def health():
 def call_handler(path):
     # Create a new span for sensitive-data-scan
     if "sensitive-data-scan" in SERVICE_NAME:
-        from opentelemetry.trace.status import StatusCode
-
         with tracer.start_as_current_span("process_request") as span:
             event = Event()
 
@@ -388,8 +406,6 @@ def run_as_job():
     """Execute handler once as a Kubernetes job."""
     # Create a new span for sensitive-data-scan
     if "sensitive-data-scan" in SERVICE_NAME:
-        from opentelemetry.trace.status import StatusCode
-
         with tracer.start_as_current_span("job_execution") as span:
             ctx = Context({})
 
