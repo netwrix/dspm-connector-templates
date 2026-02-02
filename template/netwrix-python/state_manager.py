@@ -184,6 +184,10 @@ class StateManager:
         Returns:
             True if stop was requested, False otherwise
         """
+        self.context.log.info("should_stop?")
+        if not self.supported_states.get("stop", False):
+            return False
+
         self.check_for_state_changes()
         with self._state_lock:
             return self.requested_state == "stop"
@@ -195,6 +199,7 @@ class StateManager:
         Returns:
             True if pause was requested and supported, False otherwise
         """
+        self.context.log.info("should_pause?")
         if not self.supported_states.get("pause", False):
             return False
 
