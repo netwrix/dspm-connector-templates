@@ -619,7 +619,9 @@ class Context:
 
         try:
             # Query Postgres for scan execution status via app-data-query function
-            query = f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{scan_execution_id}' LIMIT 1"
+            query = (
+                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{scan_execution_id}' LIMIT 1"
+            )
             payload = {"query": query}
 
             # Build headers with caller context information
@@ -649,13 +651,13 @@ class Context:
                     data = result.get("data", [])
                     if data and len(data) > 0:
                         execution_data = data[0]
-                        completed_objects=execution_data.get("completed_objects")
+                        completed_objects = execution_data.get("completed_objects")
                         if completed_objects > 0:
                             self.log.info(
                                 "Retrieved prior execution",
                                 scan_execution_id=scan_execution_id,
                                 completed_objects=completed_objects,
-                                status=execution_data.get("status")
+                                status=execution_data.get("status"),
                             )
                             return execution_data
                     self.log.info("No prior execution found", scan_execution_id=scan_execution_id)
