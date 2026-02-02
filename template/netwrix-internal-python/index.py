@@ -265,9 +265,11 @@ def format_response(resp):
 
 @app.before_request
 def extract_trace_context():
-    headers = dict(request.headers)
-    ctx = extract(headers)
-    trace.set_span_in_context(ctx)
+    # Skip trace extraction for sensitive-data-scan - it creates its own trace/span
+    if "sensitive-data-scan" not in SERVICE_NAME:
+        headers = dict(request.headers)
+        ctx = extract(headers)
+        trace.set_span_in_context(ctx)
 
 # Needed for openfaas backwards compatibility. Remove once openfaas is gone.
 @app.get("/_/health")
@@ -283,36 +285,77 @@ def health():
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
-    event = Event()
+    # Create a new span for sensitive-data-scan
+    if "sensitive-data-scan" in SERVICE_NAME:
+        from opentelemetry.trace.status import StatusCode
 
-    caller_attributes = {
-        "scan_id": event.headers.get("Scan-Id"),
-        "scan_execution_id": event.headers.get("Scan-Execution-Id"),
-    }
-    context = Context(caller_attributes)
+        with tracer.start_as_current_span("process_request") as span:
+            event = Event()
 
-    context.log.info(
-        "Received request",
-        http_method=event.method,
-        http_path=event.path,
-        http_query=dict(event.query),
-    )
+            caller_attributes = {
+                "scan_id": event.headers.get("Scan-Id"),
+                "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+            }
+            context = Context(caller_attributes)
 
-    try:
-        response_data = handler.handle(event, context)
-        resp = format_response(response_data)
+            context.log.info(
+                "Received request",
+                http_method=event.method,
+                http_path=event.path,
+                http_query=dict(event.query),
+            )
 
-        status_code = resp[1] if isinstance(resp, tuple) else 200
-        context.log.info("Request completed", http_status_code=status_code)
+            try:
+                response_data = handler.handle(event, context)
+                resp = format_response(response_data)
 
-        return resp
-    except Exception as e:
-        context.log.error(
-            "Request failed",
-            error_type=type(e).__name__,
-            error_message=str(e),
+                status_code = resp[1] if isinstance(resp, tuple) else 200
+                span.set_attribute("http.status_code", status_code)
+                span.set_status(StatusCode.OK)
+                context.log.info("Request completed", http_status_code=status_code)
+
+                return resp
+            except Exception as e:
+                span.set_attribute("http.status_code", 500)
+                span.record_exception(e)
+                span.set_status(StatusCode.ERROR)
+                context.log.error(
+                    "Request failed",
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+                raise
+    else:
+        event = Event()
+
+        caller_attributes = {
+            "scan_id": event.headers.get("Scan-Id"),
+            "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+        }
+        context = Context(caller_attributes)
+
+        context.log.info(
+            "Received request",
+            http_method=event.method,
+            http_path=event.path,
+            http_query=dict(event.query),
         )
-        raise
+
+        try:
+            response_data = handler.handle(event, context)
+            resp = format_response(response_data)
+
+            status_code = resp[1] if isinstance(resp, tuple) else 200
+            context.log.info("Request completed", http_status_code=status_code)
+
+            return resp
+        except Exception as e:
+            context.log.error(
+                "Request failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
 
 
 def handle_shutdown(signum, frame):
@@ -343,52 +386,108 @@ def get_execution_mode() -> str:
 
 def run_as_job():
     """Execute handler once as a Kubernetes job."""
-    ctx = Context({})
+    # Create a new span for sensitive-data-scan
+    if "sensitive-data-scan" in SERVICE_NAME:
+        from opentelemetry.trace.status import StatusCode
 
-    ctx.log.info(
-        "Starting job execution",
-        execution_mode="job",
-    )
+        with tracer.start_as_current_span("job_execution") as span:
+            ctx = Context({})
 
-    ctx.execution_mode = "job"
+            ctx.log.info(
+                "Starting job execution",
+                execution_mode="job",
+            )
 
-    event = Event(execution_mode="job")
+            ctx.execution_mode = "job"
 
-    try:
-        # Run the handler
-        response = handler.handle(event, ctx)
+            event = Event(execution_mode="job")
 
-        # Determine final status
-        status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
-        success = status_code == 200
+            try:
+                # Run the handler
+                response = handler.handle(event, ctx)
 
-        # Output result as JSON to stdout
-        result = {
-            "success": success,
-            "statusCode": status_code,
-            "body": response.get("body", {}) if isinstance(response, dict) else response,
-        }
+                # Determine final status
+                status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
+                success = status_code == 200
 
-        ctx.log.info("Job execution completed", success=success)
+                # Output result as JSON to stdout
+                result = {
+                    "success": success,
+                    "statusCode": status_code,
+                    "body": response.get("body", {}) if isinstance(response, dict) else response,
+                }
 
-    except Exception as e:
-        ctx.log.error(
-            "Job execution failed",
-            error_type=type(e).__name__,
-            error_message=str(e),
+                span.set_attribute("job.status_code", status_code)
+                span.set_status(StatusCode.OK if success else StatusCode.ERROR)
+                ctx.log.info("Job execution completed", success=success)
+
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(StatusCode.ERROR)
+                ctx.log.error(
+                    "Job execution failed",
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+
+                result = {
+                    "success": False,
+                    "statusCode": 500,
+                    "body": {"error": str(e)},
+                }
+
+            # Flush OpenTelemetry before exiting
+            flush_opentelemetry()
+
+            print(json.dumps(result))
+            sys.exit(0 if result["success"] else 1)
+    else:
+        ctx = Context({})
+
+        ctx.log.info(
+            "Starting job execution",
+            execution_mode="job",
         )
 
-        result = {
-            "success": False,
-            "statusCode": 500,
-            "body": {"error": str(e)},
-        }
+        ctx.execution_mode = "job"
 
-    # Flush OpenTelemetry before exiting
-    flush_opentelemetry()
+        event = Event(execution_mode="job")
 
-    print(json.dumps(result))
-    sys.exit(0 if result["success"] else 1)
+        try:
+            # Run the handler
+            response = handler.handle(event, ctx)
+
+            # Determine final status
+            status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
+            success = status_code == 200
+
+            # Output result as JSON to stdout
+            result = {
+                "success": success,
+                "statusCode": status_code,
+                "body": response.get("body", {}) if isinstance(response, dict) else response,
+            }
+
+            ctx.log.info("Job execution completed", success=success)
+
+        except Exception as e:
+            ctx.log.error(
+                "Job execution failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+
+            result = {
+                "success": False,
+                "statusCode": 500,
+                "body": {"error": str(e)},
+            }
+
+        # Flush OpenTelemetry before exiting
+        flush_opentelemetry()
+
+        print(json.dumps(result))
+        sys.exit(0 if result["success"] else 1)
 
 
 def run_as_http_server():
