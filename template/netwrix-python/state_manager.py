@@ -32,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import traceback
 
 # Import here to allow for easier mocking in tests
 import threading
@@ -115,14 +116,14 @@ class StateManager:
             # Get execution ID
             execution_id = self.context.scan_execution_id
             if not execution_id:
-                self.context.log.warning("No execution ID available, signal monitoring disabled")
+                logger.warning("No execution ID available, signal monitoring disabled")
                 return False
 
             # Initialize Redis handler
             self.redis_handler = RedisSignalHandler()
 
             if not self.redis_handler.health_check():
-                self.context.log.warning("Redis unavailable, signal monitoring disabled")
+                logger.warning("Redis unavailable, signal monitoring disabled")
                 return False
 
             # Create control context
@@ -163,13 +164,13 @@ class StateManager:
                     self.requested_state = "stop"
                     # Actually transition to stopping state
                     if self.set_state("stopping"):
-                        self.context.log.info("Stop signal handled, transitioning to stopping state")
+                        logger.info("Stop signal handled, transitioning to stopping state")
                     return True
                 if self.control_context.pause_requested:
                     self.requested_state = "pause"
                     # Actually transition to pausing state
                     if self.set_state("pausing"):
-                        self.context.log.info("Pause signal handled, transitioning to pausing state")
+                        logger.info("Pause signal handled, transitioning to pausing state")
                     return False
         except Exception as e:
             # just return and allow subsequent calls, in case the issue is transient
@@ -199,7 +200,6 @@ class StateManager:
         Returns:
             True if pause was requested and supported, False otherwise
         """
-        self.context.log.info("should_pause?")
         if not self.supported_states.get("pause", False):
             logger.info("pause not supported")
             return False
