@@ -269,6 +269,11 @@ def extract_trace_context():
     ctx = extract(headers)
     trace.set_span_in_context(ctx)
 
+# Needed for openfaas backwards compatibility. Remove once openfaas is gone.
+@app.get("/_/health")
+def health_openfaas():
+    """OpenFaaS health check endpoint (watchdog convention)"""
+    return jsonify(status="ok")
 
 @app.get("/health")
 def health():
