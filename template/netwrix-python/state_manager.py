@@ -199,6 +199,7 @@ class StateManager:
         Returns:
             True if pause was requested and supported, False otherwise
         """
+        self.context.log.info("should_pause?")
         if not self.supported_states.get("pause", False):
             logger.info("pause not supported")
             return False
