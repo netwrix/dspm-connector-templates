@@ -11,7 +11,7 @@ from typing import Final
 
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
-from opentelemetry.propagate import extract
+from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
 dictConfig(
@@ -34,6 +34,7 @@ dictConfig(
 )
 
 SERVICE_NAME: Final = os.getenv("SERVICE_NAME", __name__)
+TRACE_ISOLATION_ENABLED: Final = os.getenv("TRACE_ISOLATION_ENABLED", "false").lower() == "true"
 app = Flask(SERVICE_NAME)
 
 
@@ -169,6 +170,41 @@ class Context:
         self.caller_attributes = caller_attributes
         self.execution_mode = "http"
 
+    def create_thread(self, target, *args, **kwargs):
+        """
+        Create a thread that automatically inherits the current OpenTelemetry context.
+
+        This is necessary because OpenTelemetry context doesn't automatically propagate
+        to new threads. Use this when manually creating threads with threading.Thread.
+
+        Usage:
+            def my_worker(arg1, arg2):
+                context.log.info("Working with trace context!")
+
+            thread = self.create_thread(target=my_worker, args=(val1, val2), name="Worker-1")
+            thread.start()
+
+        Note: For ThreadPoolExecutor, capture context before submitting and attach in worker.
+        """
+        import threading
+        from opentelemetry import context as otel_context
+
+        # Capture the current context
+        current_context = otel_context.get_current()
+
+        # Wrap the target function to attach context
+        original_target = target
+
+        def wrapped_target(*target_args, **target_kwargs):
+            token = otel_context.attach(current_context)
+            try:
+                return original_target(*target_args, **target_kwargs)
+            finally:
+                otel_context.detach(token)
+
+        # Create thread with wrapped target
+        return threading.Thread(*args, target=wrapped_target, **kwargs)
+
 
 class ContextLogger:
     def __init__(self, context: Context):
@@ -263,12 +299,6 @@ def format_response(resp):
     return resp
 
 
-@app.before_request
-def extract_trace_context():
-    headers = dict(request.headers)
-    ctx = extract(headers)
-    trace.set_span_in_context(ctx)
-
 # Needed for openfaas backwards compatibility. Remove once openfaas is gone.
 @app.get("/_/health")
 def health_openfaas():
@@ -283,36 +313,75 @@ def health():
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
-    event = Event()
+    # Create a new span when trace isolation is enabled
+    if TRACE_ISOLATION_ENABLED:
+        with tracer.start_as_current_span("process_request") as span:
+            event = Event()
 
-    caller_attributes = {
-        "scan_id": event.headers.get("Scan-Id"),
-        "scan_execution_id": event.headers.get("Scan-Execution-Id"),
-    }
-    context = Context(caller_attributes)
+            caller_attributes = {
+                "scan_id": event.headers.get("Scan-Id"),
+                "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+            }
+            context = Context(caller_attributes)
 
-    context.log.info(
-        "Received request",
-        http_method=event.method,
-        http_path=event.path,
-        http_query=dict(event.query),
-    )
+            context.log.info(
+                "Received request",
+                http_method=event.method,
+                http_path=event.path,
+                http_query=dict(event.query),
+            )
 
-    try:
-        response_data = handler.handle(event, context)
-        resp = format_response(response_data)
+            try:
+                response_data = handler.handle(event, context)
+                resp = format_response(response_data)
 
-        status_code = resp[1] if isinstance(resp, tuple) else 200
-        context.log.info("Request completed", http_status_code=status_code)
+                status_code = resp[1] if isinstance(resp, tuple) else 200
+                span.set_attribute("http.status_code", status_code)
+                span.set_status(StatusCode.OK)
+                context.log.info("Request completed", http_status_code=status_code)
 
-        return resp
-    except Exception as e:
-        context.log.error(
-            "Request failed",
-            error_type=type(e).__name__,
-            error_message=str(e),
+                return resp
+            except Exception as e:
+                span.set_attribute("http.status_code", 500)
+                span.record_exception(e)
+                span.set_status(StatusCode.ERROR)
+                context.log.error(
+                    "Request failed",
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+                raise
+    else:
+        event = Event()
+
+        caller_attributes = {
+            "scan_id": event.headers.get("Scan-Id"),
+            "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+        }
+        context = Context(caller_attributes)
+
+        context.log.info(
+            "Received request",
+            http_method=event.method,
+            http_path=event.path,
+            http_query=dict(event.query),
         )
-        raise
+
+        try:
+            response_data = handler.handle(event, context)
+            resp = format_response(response_data)
+
+            status_code = resp[1] if isinstance(resp, tuple) else 200
+            context.log.info("Request completed", http_status_code=status_code)
+
+            return resp
+        except Exception as e:
+            context.log.error(
+                "Request failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
 
 
 def handle_shutdown(signum, frame):
@@ -343,52 +412,106 @@ def get_execution_mode() -> str:
 
 def run_as_job():
     """Execute handler once as a Kubernetes job."""
-    ctx = Context({})
+    # Create a new span when trace isolation is enabled
+    if TRACE_ISOLATION_ENABLED:
+        with tracer.start_as_current_span("job_execution") as span:
+            ctx = Context({})
 
-    ctx.log.info(
-        "Starting job execution",
-        execution_mode="job",
-    )
+            ctx.log.info(
+                "Starting job execution",
+                execution_mode="job",
+            )
 
-    ctx.execution_mode = "job"
+            ctx.execution_mode = "job"
 
-    event = Event(execution_mode="job")
+            event = Event(execution_mode="job")
 
-    try:
-        # Run the handler
-        response = handler.handle(event, ctx)
+            try:
+                # Run the handler
+                response = handler.handle(event, ctx)
 
-        # Determine final status
-        status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
-        success = status_code == 200
+                # Determine final status
+                status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
+                success = status_code == 200
 
-        # Output result as JSON to stdout
-        result = {
-            "success": success,
-            "statusCode": status_code,
-            "body": response.get("body", {}) if isinstance(response, dict) else response,
-        }
+                # Output result as JSON to stdout
+                result = {
+                    "success": success,
+                    "statusCode": status_code,
+                    "body": response.get("body", {}) if isinstance(response, dict) else response,
+                }
 
-        ctx.log.info("Job execution completed", success=success)
+                span.set_attribute("job.status_code", status_code)
+                span.set_status(StatusCode.OK if success else StatusCode.ERROR)
+                ctx.log.info("Job execution completed", success=success)
 
-    except Exception as e:
-        ctx.log.error(
-            "Job execution failed",
-            error_type=type(e).__name__,
-            error_message=str(e),
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(StatusCode.ERROR)
+                ctx.log.error(
+                    "Job execution failed",
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+
+                result = {
+                    "success": False,
+                    "statusCode": 500,
+                    "body": {"error": str(e)},
+                }
+
+            # Flush OpenTelemetry before exiting
+            flush_opentelemetry()
+
+            print(json.dumps(result))
+            sys.exit(0 if result["success"] else 1)
+    else:
+        ctx = Context({})
+
+        ctx.log.info(
+            "Starting job execution",
+            execution_mode="job",
         )
 
-        result = {
-            "success": False,
-            "statusCode": 500,
-            "body": {"error": str(e)},
-        }
+        ctx.execution_mode = "job"
 
-    # Flush OpenTelemetry before exiting
-    flush_opentelemetry()
+        event = Event(execution_mode="job")
 
-    print(json.dumps(result))
-    sys.exit(0 if result["success"] else 1)
+        try:
+            # Run the handler
+            response = handler.handle(event, ctx)
+
+            # Determine final status
+            status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
+            success = status_code == 200
+
+            # Output result as JSON to stdout
+            result = {
+                "success": success,
+                "statusCode": status_code,
+                "body": response.get("body", {}) if isinstance(response, dict) else response,
+            }
+
+            ctx.log.info("Job execution completed", success=success)
+
+        except Exception as e:
+            ctx.log.error(
+                "Job execution failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+
+            result = {
+                "success": False,
+                "statusCode": 500,
+                "body": {"error": str(e)},
+            }
+
+        # Flush OpenTelemetry before exiting
+        flush_opentelemetry()
+
+        print(json.dumps(result))
+        sys.exit(0 if result["success"] else 1)
 
 
 def run_as_http_server():

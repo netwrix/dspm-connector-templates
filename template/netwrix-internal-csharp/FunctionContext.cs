@@ -26,8 +26,19 @@ public class FunctionContext
         ScanId = Environment.GetEnvironmentVariable("SCAN_ID");
         SyncId = Environment.GetEnvironmentVariable("SYNC_ID");
         FunctionType = functionType;
-        
+
         Secrets = new Dictionary<string, string>();
+
+        // Extract caller attributes from request headers
+        CallerAttributes = new Dictionary<string, string>();
+        if (_httpContext.Request.Headers.TryGetValue("Scan-Id", out var scanIdHeader))
+        {
+            CallerAttributes["scan_id"] = scanIdHeader.ToString();
+        }
+        if (_httpContext.Request.Headers.TryGetValue("Scan-Execution-Id", out var scanExecutionIdHeader))
+        {
+            CallerAttributes["scan_execution_id"] = scanExecutionIdHeader.ToString();
+        }
     }
 
     public Dictionary<string, string> Secrets { get; private set; }
@@ -37,6 +48,7 @@ public class FunctionContext
     public Guid SyncExecutionId { get; set; }
     public string? FunctionType { get; set; }
     public Guid SourceId { get; set; }
+    public Dictionary<string, string> CallerAttributes { get; private set; }
 
     public void LoadSecrets()
     {

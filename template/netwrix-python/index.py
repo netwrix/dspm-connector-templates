@@ -150,7 +150,7 @@ def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
 
         RequestsInstrumentor().instrument()
 
-        logging.info("OpenTelemetry initialized")
+        logging.info("OpenTelemetry initialized successfully")
 
         def flush_opentelemetry():
             trace_provider.force_flush()
@@ -888,112 +888,123 @@ def get_execution_mode() -> str:
 
 def run_as_job():
     """Execute handler once as a Kubernetes job."""
-    started_at = datetime.now(UTC).isoformat()
+    # Create a root span for the job execution
+    with tracer.start_as_current_span("job_execution") as span:
+        started_at = datetime.now(UTC).isoformat()
 
-    ctx = Context()
-    ctx.secrets = get_secrets(ctx)
+        ctx = Context()
+        ctx.secrets = get_secrets(ctx)
 
-    # Parse scan/sync execution ID from environment or REQUEST_DATA
-    request_data_str = os.getenv("REQUEST_DATA", "{}")
-    try:
-        request_data = json.loads(request_data_str)
-    except json.JSONDecodeError:
-        request_data = {}
+        # Parse scan/sync execution ID from environment or REQUEST_DATA
+        request_data_str = os.getenv("REQUEST_DATA", "{}")
+        try:
+            request_data = json.loads(request_data_str)
+        except json.JSONDecodeError:
+            request_data = {}
 
-    ctx.scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
+        ctx.scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
 
-    ctx.log.info(
-        "Starting job execution",
-        execution_mode="job",
-        function_type=ctx.function_type,
-        scan_id=ctx.scan_id,
-        scan_execution_id=ctx.scan_execution_id,
-    )
-
-    event = Event(execution_mode="job")
-
-    try:
-        # Update execution status to running for scan/sync operations
-        if ctx.function_type in ("access-scan", "sync"):
-            ctx.update_execution(status="running")
-            ctx.log.info("Started operation", function_type=ctx.function_type)
-
-        # Run the handler
-        response = handler.handle(event, ctx)
-
-        # Flush any remaining batched data
-        ctx.flush_tables()
-
-        completed_at = datetime.now(UTC).isoformat()
-
-        # Update execution status based on response
-        status_code = response.get("statusCode", 500)
-        success = status_code == 200
-
-        if ctx.function_type in ("access-scan", "sync"):
-            if success:
-                # Check if handler set a specific status (like 'stopped')
-                if response.get("body", {}).get("status") == "stopped":
-                    ctx.update_execution(status="stopped", completed_at=completed_at)
-                    ctx.log.info("Operation was stopped", function_type=ctx.function_type, status="stopped")
-                else:
-                    ctx.update_execution(status="completed", completed_at=completed_at)
-                    ctx.log.info(
-                        f"Completed {ctx.function_type} operation successfully",
-                        function_type=ctx.function_type,
-                        status="completed",
-                    )
-            else:
-                ctx.update_execution(status="failed", completed_at=completed_at)
-                ctx.log.error(
-                    f"Failed {ctx.function_type} operation",
-                    function_type=ctx.function_type,
-                    status="failed",
-                    status_code=status_code,
-                )
-
-        # Determine final status
-        final_status = response.get("body", {}).get("status", "completed") if success else "failed"
-
-        # Output result as JSON to stdout
-        result = {
-            "success": success,
-            "status": final_status,
-            "statusCode": status_code,
-            "body": response.get("body", {}),
-            "startedAt": started_at,
-            "completedAt": completed_at,
-        }
-
-        ctx.log.info("Job execution completed", success=success, status=final_status)
-
-    except Exception as e:
-        completed_at = datetime.now(UTC).isoformat()
-
-        # Update execution status to failed for scan/sync operations
-        if ctx.function_type in ("access-scan", "sync"):
-            ctx.update_execution(status="failed", completed_at=completed_at)
-
-        ctx.log.error(
-            "Job execution failed",
-            error_type=type(e).__name__,
-            error_message=str(e),
+        ctx.log.info(
+            "Starting job execution",
+            execution_mode="job",
+            function_type=ctx.function_type,
+            scan_id=ctx.scan_id,
+            scan_execution_id=ctx.scan_execution_id,
         )
 
-        result = {
-            "success": False,
-            "status": "failed",
-            "statusCode": 500,
-            "body": {"error": str(e)},
-            "startedAt": started_at,
-            "completedAt": completed_at,
-        }
+        event = Event(execution_mode="job")
 
-    # Flush OpenTelemetry before exiting
-    flush_opentelemetry()
+        try:
+            # Update execution status to running for scan/sync operations
+            if ctx.function_type in ("access-scan", "sync"):
+                ctx.update_execution(status="running")
+                ctx.log.info("Started operation", function_type=ctx.function_type)
 
-    print(json.dumps(result))
-    sys.exit(0 if result["success"] else 1)
+            # Run the handler
+            with tracer.start_as_current_span("handle_request"):
+                response = handler.handle(event, ctx)
+
+            # Flush any remaining batched data
+            ctx.flush_tables()
+
+            completed_at = datetime.now(UTC).isoformat()
+
+            # Update execution status based on response
+            status_code = response.get("statusCode", 500)
+            success = status_code == 200
+
+            if ctx.function_type in ("access-scan", "sync"):
+                if success:
+                    # Check if handler set a specific status (like 'stopped')
+                    if response.get("body", {}).get("status") == "stopped":
+                        ctx.update_execution(status="stopped", completed_at=completed_at)
+                        ctx.log.info("Operation was stopped", function_type=ctx.function_type, status="stopped")
+                    else:
+                        ctx.update_execution(status="completed", completed_at=completed_at)
+                        ctx.log.info(
+                            f"Completed {ctx.function_type} operation successfully",
+                            function_type=ctx.function_type,
+                            status="completed",
+                        )
+                else:
+                    ctx.update_execution(status="failed", completed_at=completed_at)
+                    ctx.log.error(
+                        f"Failed {ctx.function_type} operation",
+                        function_type=ctx.function_type,
+                        status="failed",
+                        status_code=status_code,
+                    )
+
+            # Determine final status
+            final_status = response.get("body", {}).get("status", "completed") if success else "failed"
+
+            # Output result as JSON to stdout
+            result = {
+                "success": success,
+                "status": final_status,
+                "statusCode": status_code,
+                "body": response.get("body", {}),
+                "startedAt": started_at,
+                "completedAt": completed_at,
+            }
+
+            # Set span attributes
+            span.set_attribute("job.status", final_status)
+            span.set_attribute("job.status_code", status_code)
+            span.set_status(StatusCode.OK if success else StatusCode.ERROR)
+
+            ctx.log.info("Job execution completed", success=success, status=final_status)
+
+        except Exception as e:
+            completed_at = datetime.now(UTC).isoformat()
+
+            # Update execution status to failed for scan/sync operations
+            if ctx.function_type in ("access-scan", "sync"):
+                ctx.update_execution(status="failed", completed_at=completed_at)
+
+            span.record_exception(e)
+            span.set_status(StatusCode.ERROR)
+
+            ctx.log.error(
+                "Job execution failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+
+            result = {
+                "success": False,
+                "status": "failed",
+                "statusCode": 500,
+                "body": {"error": str(e)},
+                "startedAt": started_at,
+                "completedAt": completed_at,
+            }
+
+        # Flush OpenTelemetry before exiting
+        flush_opentelemetry()
+
+        print(json.dumps(result))
+        sys.exit(0 if result["success"] else 1)
 
 
 def run_as_http_server():

@@ -24,9 +24,7 @@ namespace function
             var configuration = builder.Configuration;
 
             // Configure OpenTelemetry
-            var sourceType = Environment.GetEnvironmentVariable("SOURCE_TYPE") ?? "internal";
-            var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
-            var serviceName = $"{sourceType}-{functionType}";
+            var serviceName = Environment.GetEnvironmentVariable("SERVICE_NAME") ?? "netwrix-internal-csharp";
             var otelEnabled = Environment.GetEnvironmentVariable("OTEL_ENABLED")?.ToLowerInvariant() != "false";
             var otelEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
                 ?? "http://otel-collector.access-analyzer.svc.cluster.local:4318";
@@ -55,7 +53,22 @@ namespace function
                     {
                         tracing
                             .AddSource(serviceName)
-                            .AddAspNetCoreInstrumentation()
+                            // ASP.NET Core instrumentation automatically:
+                            // 1. Extracts trace context from incoming request headers (traceparent, tracestate)
+                            // 2. Creates an Activity (span) from the extracted context or starts a new trace
+                            // 3. Sets Activity.Current so child spans can be created
+                            .AddAspNetCoreInstrumentation(options =>
+                            {
+                                options.Filter = (httpContext) =>
+                                {
+                                    // Don't instrument health check endpoints
+                                    var path = httpContext.Request.Path.Value;
+                                    return path != "/health" && path != "/healthz" && path != "/ready";
+                                };
+                                // Enable recording of exception details
+                                options.RecordException = true;
+                            })
+                            // HttpClient instrumentation automatically propagates trace context to outgoing requests
                             .AddHttpClientInstrumentation()
                             .AddOtlpExporter(options =>
                             {
@@ -93,6 +106,26 @@ namespace function
             {
                 builder.Logging.AddConsole();
             }
+
+            // Set minimum log level and filter out noisy logs
+            var logLevel = Environment.GetEnvironmentVariable("LOG_LEVEL")?.ToUpper() switch
+            {
+                "DEBUG" => LogLevel.Debug,
+                "INFORMATION" => LogLevel.Information,
+                "WARNING" => LogLevel.Warning,
+                "ERROR" => LogLevel.Error,
+                _ => LogLevel.Information
+            };
+            builder.Logging.SetMinimumLevel(logLevel);
+
+            // Filter out noisy ASP.NET Core infrastructure logs
+            builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+            builder.Logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning);
+
+            // Allow function-specific logs at configured level (respects LOG_LEVEL env var)
+            builder.Logging.AddFilter("function", logLevel);
 
             // Register ActivitySource for DI
             builder.Services.AddSingleton(activitySource);
