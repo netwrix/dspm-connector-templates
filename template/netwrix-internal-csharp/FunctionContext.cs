@@ -175,40 +175,4 @@ public class FunctionContext
             }
         };
     }
-
-    /// <summary>
-    /// Get headers with trace context propagation for calling other services.
-    /// This ensures the current trace/span is propagated to downstream services.
-    ///
-    /// Note: When using HttpClient with OpenTelemetry instrumentation (AddHttpClientInstrumentation),
-    /// trace context is automatically propagated. This method is provided for manual header injection
-    /// if needed for non-HttpClient scenarios.
-    /// </summary>
-    /// <returns>Dictionary of headers with trace context (traceparent, tracestate) and caller attributes</returns>
-    public Dictionary<string, string> GetPropagationHeaders()
-    {
-        var headers = new Dictionary<string, string>
-        {
-            ["Scan-Id"] = CallerAttributes.TryGetValue("scan_id", out var scanId) ? scanId : "",
-            ["Scan-Execution-Id"] = CallerAttributes.TryGetValue("scan_execution_id", out var scanExecId) ? scanExecId : ""
-        };
-
-        // Get current activity for trace context
-        var activity = Activity.Current;
-        if (activity != null)
-        {
-            // Inject W3C trace context headers
-            // Format: traceparent: 00-{trace-id}-{span-id}-{trace-flags}
-            var traceParent = $"00-{activity.TraceId}-{activity.SpanId}-{(activity.ActivityTraceFlags & ActivityTraceFlags.Recorded) switch { ActivityTraceFlags.Recorded => "01", _ => "00" }}";
-            headers["traceparent"] = traceParent;
-
-            // Add tracestate if present
-            if (!string.IsNullOrEmpty(activity.TraceStateString))
-            {
-                headers["tracestate"] = activity.TraceStateString;
-            }
-        }
-
-        return headers;
-    }
 }
