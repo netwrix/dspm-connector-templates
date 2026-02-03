@@ -53,6 +53,10 @@ namespace function
                     {
                         tracing
                             .AddSource(serviceName)
+                            // ASP.NET Core instrumentation automatically:
+                            // 1. Extracts trace context from incoming request headers (traceparent, tracestate)
+                            // 2. Creates an Activity (span) from the extracted context or starts a new trace
+                            // 3. Sets Activity.Current so child spans can be created
                             .AddAspNetCoreInstrumentation(options =>
                             {
                                 options.Filter = (httpContext) =>
@@ -61,7 +65,10 @@ namespace function
                                     var path = httpContext.Request.Path.Value;
                                     return path != "/health" && path != "/healthz" && path != "/ready";
                                 };
+                                // Enable recording of exception details
+                                options.RecordException = true;
                             })
+                            // HttpClient instrumentation automatically propagates trace context to outgoing requests
                             .AddHttpClientInstrumentation()
                             .AddOtlpExporter(options =>
                             {
@@ -101,7 +108,15 @@ namespace function
             }
 
             // Set minimum log level and filter out noisy logs
-            builder.Logging.SetMinimumLevel(LogLevel.Information);
+            var logLevel = Environment.GetEnvironmentVariable("LOG_LEVEL")?.ToUpper() switch
+            {
+                "DEBUG" => LogLevel.Debug,
+                "INFORMATION" => LogLevel.Information,
+                "WARNING" => LogLevel.Warning,
+                "ERROR" => LogLevel.Error,
+                _ => LogLevel.Information
+            };
+            builder.Logging.SetMinimumLevel(logLevel);
 
             // Filter out noisy ASP.NET Core infrastructure logs
             builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
@@ -109,8 +124,8 @@ namespace function
             builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
             builder.Logging.AddFilter("Microsoft.AspNetCore.Server.Kestrel", LogLevel.Warning);
 
-            // Allow function-specific logs at Information level
-            builder.Logging.AddFilter("function", LogLevel.Information);
+            // Allow function-specific logs at configured level (respects LOG_LEVEL env var)
+            builder.Logging.AddFilter("function", logLevel);
 
             // Register ActivitySource for DI
             builder.Services.AddSingleton(activitySource);

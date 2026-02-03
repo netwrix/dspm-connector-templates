@@ -26,8 +26,19 @@ public class FunctionContext
         ScanId = Environment.GetEnvironmentVariable("SCAN_ID");
         SyncId = Environment.GetEnvironmentVariable("SYNC_ID");
         FunctionType = functionType;
-        
+
         Secrets = new Dictionary<string, string>();
+
+        // Extract caller attributes from request headers
+        CallerAttributes = new Dictionary<string, string>();
+        if (_httpContext.Request.Headers.TryGetValue("Scan-Id", out var scanIdHeader))
+        {
+            CallerAttributes["scan_id"] = scanIdHeader.ToString();
+        }
+        if (_httpContext.Request.Headers.TryGetValue("Scan-Execution-Id", out var scanExecutionIdHeader))
+        {
+            CallerAttributes["scan_execution_id"] = scanExecutionIdHeader.ToString();
+        }
     }
 
     public Dictionary<string, string> Secrets { get; private set; }
@@ -37,6 +48,7 @@ public class FunctionContext
     public Guid SyncExecutionId { get; set; }
     public string? FunctionType { get; set; }
     public Guid SourceId { get; set; }
+    public Dictionary<string, string> CallerAttributes { get; private set; }
 
     public void LoadSecrets()
     {
@@ -162,5 +174,41 @@ public class FunctionContext
                 ["error"] = errorMessage
             }
         };
+    }
+
+    /// <summary>
+    /// Get headers with trace context propagation for calling other services.
+    /// This ensures the current trace/span is propagated to downstream services.
+    ///
+    /// Note: When using HttpClient with OpenTelemetry instrumentation (AddHttpClientInstrumentation),
+    /// trace context is automatically propagated. This method is provided for manual header injection
+    /// if needed for non-HttpClient scenarios.
+    /// </summary>
+    /// <returns>Dictionary of headers with trace context (traceparent, tracestate) and caller attributes</returns>
+    public Dictionary<string, string> GetPropagationHeaders()
+    {
+        var headers = new Dictionary<string, string>
+        {
+            ["Scan-Id"] = CallerAttributes.TryGetValue("scan_id", out var scanId) ? scanId : "",
+            ["Scan-Execution-Id"] = CallerAttributes.TryGetValue("scan_execution_id", out var scanExecId) ? scanExecId : ""
+        };
+
+        // Get current activity for trace context
+        var activity = Activity.Current;
+        if (activity != null)
+        {
+            // Inject W3C trace context headers
+            // Format: traceparent: 00-{trace-id}-{span-id}-{trace-flags}
+            var traceParent = $"00-{activity.TraceId}-{activity.SpanId}-{(activity.ActivityTraceFlags & ActivityTraceFlags.Recorded) switch { ActivityTraceFlags.Recorded => "01", _ => "00" }}";
+            headers["traceparent"] = traceParent;
+
+            // Add tracestate if present
+            if (!string.IsNullOrEmpty(activity.TraceStateString))
+            {
+                headers["tracestate"] = activity.TraceStateString;
+            }
+        }
+
+        return headers;
     }
 }

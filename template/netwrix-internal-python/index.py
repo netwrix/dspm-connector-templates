@@ -170,6 +170,36 @@ class Context:
         self.caller_attributes = caller_attributes
         self.execution_mode = "http"
 
+    def create_thread(self, target, *args, **kwargs):
+        """
+        Create a thread that automatically inherits the current OpenTelemetry context.
+
+        Usage:
+            def my_worker(arg1, arg2):
+                context.log.info("Working with trace context!")
+
+            thread = self.create_thread(target=my_worker, args=(val1, val2), name="Worker-1")
+            thread.start()
+        """
+        import threading
+        from opentelemetry import context as otel_context
+
+        # Capture the current context
+        current_context = otel_context.get_current()
+
+        # Wrap the target function to attach context
+        original_target = target
+
+        def wrapped_target(*target_args, **target_kwargs):
+            token = otel_context.attach(current_context)
+            try:
+                return original_target(*target_args, **target_kwargs)
+            finally:
+                otel_context.detach(token)
+
+        # Create thread with wrapped target
+        return threading.Thread(*args, target=wrapped_target, **kwargs)
+
     def get_propagation_headers(self) -> dict:
         """
         Get headers with trace context propagation for calling other services.
@@ -178,6 +208,8 @@ class Context:
         Returns:
             dict: Headers with trace context (traceparent, tracestate) and caller attributes
         """
+        from opentelemetry import context as otel_context
+
         headers = {
             "Scan-Id": self.caller_attributes.get("scan_id", ""),
             "Scan-Execution-Id": self.caller_attributes.get("scan_execution_id", ""),
@@ -185,7 +217,20 @@ class Context:
 
         # Inject current trace context into headers for propagation
         # This is especially important for sensitive-data-scan which creates its own spans
-        inject(headers)
+        # We need to explicitly pass the current context to inject()
+        inject(headers, context=otel_context.get_current())
+
+        # Debug logging to see what's being injected
+        span = trace.get_current_span()
+        if span and span.is_recording():
+            span_context = span.get_span_context()
+            logger.debug(
+                f"get_propagation_headers: TraceId={format(span_context.trace_id, '032x')}, "
+                f"SpanId={format(span_context.span_id, '016x')}, "
+                f"traceparent={headers.get('traceparent', 'NONE')}"
+            )
+        else:
+            logger.warning("get_propagation_headers: No active span found!")
 
         return headers
 
