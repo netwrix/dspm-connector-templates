@@ -11,7 +11,6 @@ from typing import Final
 
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
-from opentelemetry.propagate import extract
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
@@ -35,6 +34,7 @@ dictConfig(
 )
 
 SERVICE_NAME: Final = os.getenv("SERVICE_NAME", __name__)
+TRACE_ISOLATION_ENABLED: Final = os.getenv("TRACE_ISOLATION_ENABLED", "false").lower() == "true"
 app = Flask(SERVICE_NAME)
 
 
@@ -299,14 +299,6 @@ def format_response(resp):
     return resp
 
 
-@app.before_request
-def extract_trace_context():
-    # Skip trace extraction for sensitive-data-scan - it creates its own trace/span
-    if "sensitive-data-scan" not in SERVICE_NAME:
-        headers = dict(request.headers)
-        ctx = extract(headers)
-        trace.set_span_in_context(ctx)
-
 # Needed for openfaas backwards compatibility. Remove once openfaas is gone.
 @app.get("/_/health")
 def health_openfaas():
@@ -321,8 +313,8 @@ def health():
 @app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path):
-    # Create a new span for sensitive-data-scan
-    if "sensitive-data-scan" in SERVICE_NAME:
+    # Create a new span when trace isolation is enabled
+    if TRACE_ISOLATION_ENABLED:
         with tracer.start_as_current_span("process_request") as span:
             event = Event()
 
@@ -420,8 +412,8 @@ def get_execution_mode() -> str:
 
 def run_as_job():
     """Execute handler once as a Kubernetes job."""
-    # Create a new span for sensitive-data-scan
-    if "sensitive-data-scan" in SERVICE_NAME:
+    # Create a new span when trace isolation is enabled
+    if TRACE_ISOLATION_ENABLED:
         with tracer.start_as_current_span("job_execution") as span:
             ctx = Context({})
 
