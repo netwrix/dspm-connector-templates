@@ -5,7 +5,6 @@ import os
 import signal
 import sys
 from collections.abc import Callable
-from datetime import UTC, datetime
 from logging.config import dictConfig
 from typing import Final
 
@@ -187,6 +186,7 @@ class Context:
         Note: For ThreadPoolExecutor, capture context before submitting and attach in worker.
         """
         import threading
+
         from opentelemetry import context as otel_context
 
         # Capture the current context
@@ -305,6 +305,7 @@ def health_openfaas():
     """OpenFaaS health check endpoint (watchdog convention)"""
     return jsonify(status="ok")
 
+
 @app.get("/health")
 def health():
     return jsonify(status="ok")
@@ -318,11 +319,11 @@ def call_handler(path):
         with tracer.start_as_current_span("process_request") as span:
             event = Event()
 
-    caller_attributes = {
-        "scan_id": event.headers.get("Scan-Id"),
-        "scan_execution_id": event.headers.get("Scan-Execution-Id"),
-    }
-    context = Context(caller_attributes)
+            caller_attributes = {
+                "scan_id": event.headers.get("Scan-Id"),
+                "scan_execution_id": event.headers.get("Scan-Execution-Id"),
+            }
+            context = Context(caller_attributes)
 
             context.log.info(
                 "Received request",
