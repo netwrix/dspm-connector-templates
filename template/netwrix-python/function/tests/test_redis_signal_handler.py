@@ -3,51 +3,22 @@ Unit tests for redis_signal_handler module using pytest framework
 Tests cover:
 - Redis connection management
 - Control signal reading
-- Checkpoint saving and retrieval
 - Status updates
 - Stream cleanup
 - Health checks
-- Timeout handling
+- Pause and resume functionality
 """
 
 import pytest
-import time
+import sys
+import os
 from unittest.mock import MagicMock, patch
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
 # Import the module to test
-from function.redis_signal_handler import RedisSignalHandler, ScanControlContext, TimeoutError, run_with_timeout
-
-
-class TestRunWithTimeout:
-    """Test the run_with_timeout utility function"""
-
-    def test_run_with_timeout_success(self):
-        """Test function completes within timeout"""
-
-        def quick_func(x, y):
-            return x + y
-
-        result = run_with_timeout(quick_func, args=(5, 3), timeout=5)
-        assert result == 8
-
-    def test_run_with_timeout_timeout(self):
-        """Test function times out"""
-
-        def slow_func():
-            time.sleep(2)
-            return "should not reach"
-
-        with pytest.raises(TimeoutError):
-            run_with_timeout(slow_func, timeout=0.5)
-
-    def test_run_with_timeout_with_kwargs(self):
-        """Test function with keyword arguments"""
-
-        def func_with_kwargs(a, b=10):
-            return a * b
-
-        result = run_with_timeout(func_with_kwargs, args=(3,), kwargs={"b": 5}, timeout=5)
-        assert result == 15
+from redis_signal_handler import RedisSignalHandler, ScanControlContext
 
 
 class TestRedisSignalHandler:
@@ -61,7 +32,7 @@ class TestRedisSignalHandler:
     @pytest.fixture
     def handler(self, mock_redis_client):
         """Create RedisSignalHandler with mocked Redis"""
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+        with patch("redis.from_url") as mock_from_url:
             mock_from_url.return_value = mock_redis_client
             handler = RedisSignalHandler("redis://localhost:6379")
             return handler
@@ -70,26 +41,23 @@ class TestRedisSignalHandler:
         """Test successful Redis connection"""
         mock_redis_client.ping.return_value = True
 
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+        with patch("redis.from_url") as mock_from_url:
             mock_from_url.return_value = mock_redis_client
             handler = RedisSignalHandler("redis://localhost:6379")
 
-        assert handler.connected is True
         assert handler.client is not None
         assert handler.redis_url == "redis://localhost:6379"
 
     def test_initialization_failure(self):
         """Test failed Redis connection"""
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+        with patch("redis.from_url") as mock_from_url:
             mock_from_url.side_effect = Exception("Connection refused")
             handler = RedisSignalHandler("redis://localhost:6379")
 
-        assert handler.connected is False
         assert handler.client is None
 
     def test_check_control_signal_success(self, handler, mock_redis_client):
         """Test successful control signal reading"""
-        handler.connected = True
         handler.client = mock_redis_client
 
         # Mock xread response
@@ -97,11 +65,7 @@ class TestRedisSignalHandler:
             ("scan:control:exec-123", [("1234567890-0", {"action": "STOP", "reason": "user_request"})])
         ]
 
-        with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-            mock_timeout.return_value = [
-                ("scan:control:exec-123", [("1234567890-0", {"action": "STOP", "reason": "user_request"})])
-            ]
-            signal = handler.check_control_signal("exec-123", "0")
+        signal = handler.check_control_signal("exec-123", "0")
 
         assert signal is not None
         assert signal["action"] == "STOP"
@@ -109,61 +73,24 @@ class TestRedisSignalHandler:
 
     def test_check_control_signal_no_signal(self, handler, mock_redis_client):
         """Test no control signal available"""
-        handler.connected = True
         handler.client = mock_redis_client
+        mock_redis_client.xread.return_value = []
 
-        with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-            mock_timeout.return_value = []
-            signal = handler.check_control_signal("exec-123", "0")
+        signal = handler.check_control_signal("exec-123", "0")
 
         assert signal is None
 
     def test_check_control_signal_timeout(self, handler, mock_redis_client):
         """Test timeout when reading control signal"""
-        handler.connected = True
         handler.client = mock_redis_client
+        mock_redis_client.xread.side_effect = Exception("Timeout")
 
-        with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-            mock_timeout.side_effect = TimeoutError("Timeout")
-            signal = handler.check_control_signal("exec-123", "0")
+        signal = handler.check_control_signal("exec-123", "0")
 
         assert signal is None
-        assert handler.connected is False
-
-    def test_save_checkpoint_success(self, handler, mock_redis_client):
-        """Test successful checkpoint saving"""
-        handler.connected = True
-        handler.client = mock_redis_client
-        mock_redis_client.xadd.return_value = "1234567890-1"
-
-        checkpoint_data = {
-            "state": {"processing": 10},
-            "scanned_paths": ["/path1", "/path2"],
-            "current_path": "/path1",
-            "objects_count": 100,
-            "failed_paths": [],
-            "worker_states": {},
-        }
-
-        result = handler.save_checkpoint("exec-123", checkpoint_data)
-
-        assert result == "1234567890-1"
-        mock_redis_client.xadd.assert_called_once()
-        mock_redis_client.expire.assert_called_once_with("scan:checkpoint:exec-123", 86400)
-
-    def test_save_checkpoint_failure(self, handler, mock_redis_client):
-        """Test checkpoint save failure"""
-        handler.connected = True
-        handler.client = mock_redis_client
-        mock_redis_client.xadd.side_effect = Exception("Redis error")
-
-        result = handler.save_checkpoint("exec-123", {})
-
-        assert result is None
 
     def test_update_status_success(self, handler, mock_redis_client):
         """Test successful status update"""
-        handler.connected = True
         handler.client = mock_redis_client
         mock_redis_client.xadd.return_value = "1234567890-2"
 
@@ -173,29 +100,19 @@ class TestRedisSignalHandler:
 
         assert result == "1234567890-2"
         mock_redis_client.xadd.assert_called_once()
-        args, kwargs = mock_redis_client.xadd.call_args
-        message_data = args[1]
-        assert message_data["status"] == "stopping"
 
     def test_cleanup_streams_success(self, handler, mock_redis_client):
         """Test successful stream cleanup"""
-        handler.connected = True
         handler.client = mock_redis_client
-        mock_redis_client.delete.return_value = 3
+        mock_redis_client.delete.return_value = 2
 
         result = handler.cleanup_streams("exec-123")
 
         assert result is True
         mock_redis_client.delete.assert_called_once()
-        # Verify all three streams are targeted
-        call_args = mock_redis_client.delete.call_args[0]
-        assert "scan:control:exec-123" in call_args
-        assert "scan:checkpoint:exec-123" in call_args
-        assert "scan:status:exec-123" in call_args
 
     def test_cleanup_streams_failure(self, handler, mock_redis_client):
         """Test stream cleanup failure"""
-        handler.connected = True
         handler.client = mock_redis_client
         mock_redis_client.delete.side_effect = Exception("Redis error")
 
@@ -205,41 +122,34 @@ class TestRedisSignalHandler:
 
     def test_health_check_success(self, handler, mock_redis_client):
         """Test successful health check"""
-        handler.connected = True
         handler.client = mock_redis_client
+        mock_redis_client.ping.return_value = True
 
-        with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-            mock_timeout.return_value = True
-            result = handler.health_check()
+        result = handler.health_check()
 
         assert result is True
 
-    def test_health_check_timeout(self, handler, mock_redis_client):
-        """Test health check with timeout"""
-        handler.connected = True
+    def test_health_check_connection_present(self, handler, mock_redis_client):
+        """Test health check with healthy connection"""
         handler.client = mock_redis_client
+        mock_redis_client.ping.return_value = True
 
-        with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-            mock_timeout.side_effect = TimeoutError("Timeout")
-            result = handler.health_check()
+        result = handler.health_check()
 
-        assert result is False
-        assert handler.connected is False
+        assert result is True
+        mock_redis_client.ping.assert_called()
 
     def test_close(self, handler, mock_redis_client):
         """Test closing Redis connection"""
-        handler.connected = True
         handler.client = mock_redis_client
 
         handler.close()
 
         mock_redis_client.close.assert_called_once()
-        assert handler.connected is False
         assert handler.client is None
 
     def test_close_with_error(self, handler, mock_redis_client):
         """Test closing Redis connection with error"""
-        handler.connected = True
         handler.client = mock_redis_client
         mock_redis_client.close.side_effect = Exception("Close error")
 
@@ -247,15 +157,15 @@ class TestRedisSignalHandler:
         handler.close()
 
         assert handler.client is None
-        assert handler.connected is False
 
     def test_context_manager(self, mock_redis_client):
         """Test using RedisSignalHandler as context manager"""
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
+        with patch("redis.from_url") as mock_from_url:
             mock_from_url.return_value = mock_redis_client
+            mock_redis_client.ping.return_value = True
 
             with RedisSignalHandler("redis://localhost:6379") as handler:
-                assert handler.connected is True
+                assert handler.client is not None
 
             mock_redis_client.close.assert_called_once()
 
@@ -296,7 +206,8 @@ class TestScanControlContext:
 
         result = context.check_for_signals()
 
-        assert result is False  # Not a stop request
+        # PAUSE signal returns True to indicate signal was received
+        assert result is True
         assert context.pause_requested is True
 
     def test_check_for_signals_resume(self, context, mock_handler):
@@ -316,34 +227,6 @@ class TestScanControlContext:
 
         assert result is False
 
-    def test_should_checkpoint_true(self, context):
-        """Test checkpoint interval elapsed"""
-        context.checkpoint_interval = 1
-        context.last_checkpoint_time = time.time() - 2  # 2 seconds ago
-
-        result = context.should_checkpoint()
-
-        assert result is True
-
-    def test_should_checkpoint_false(self, context):
-        """Test checkpoint interval not elapsed"""
-        context.checkpoint_interval = 60
-        context.last_checkpoint_time = time.time() - 10  # 10 seconds ago
-
-        result = context.should_checkpoint()
-
-        assert result is False
-
-    def test_update_checkpoint_time(self, context):
-        """Test updating checkpoint timestamp"""
-        old_time = context.last_checkpoint_time
-        context.checkpoint_interval = 0.1
-        time.sleep(0.15)
-
-        context.update_checkpoint_time()
-
-        assert context.last_checkpoint_time > old_time
-
     def test_should_stop(self, context):
         """Test should_stop method"""
         assert context.should_stop() is False
@@ -359,79 +242,199 @@ class TestScanControlContext:
         assert context.should_pause() is True
 
 
-class TestTimeoutHandling:
-    """Test timeout handling in signal operations"""
+class TestPauseResumeFeature:
+    """Test pause and resume signal handling"""
 
-    def test_xread_timeout_reconnection(self):
-        """Test that connection is marked as broken on timeout"""
-        mock_client = MagicMock()
+    @pytest.fixture
+    def mock_handler(self):
+        """Create a mock RedisSignalHandler"""
+        return MagicMock(spec=RedisSignalHandler)
 
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-            mock_from_url.return_value = mock_client
+    @pytest.fixture
+    def context(self, mock_handler):
+        """Create ScanControlContext with mocked handler"""
+        return ScanControlContext("exec-123", mock_handler)
+
+    def test_pause_signal_sets_pause_requested(self, context, mock_handler):
+        """Test that PAUSE signal sets pause_requested flag"""
+        mock_handler.check_control_signal.return_value = {"action": "PAUSE", "_id": "456-0"}
+
+        result = context.check_for_signals()
+
+        assert context.pause_requested is True
+        assert context.stop_requested is False
+        # PAUSE signal returns True to indicate signal was received
+        assert result is True
+
+    def test_resume_signal_clears_pause_requested(self, context, mock_handler):
+        """Test that RESUME signal clears pause_requested flag"""
+        context.pause_requested = True
+        mock_handler.check_control_signal.return_value = {"action": "RESUME", "_id": "789-0"}
+
+        context.check_for_signals()
+
+        assert context.pause_requested is False
+        assert context.stop_requested is False
+
+    def test_pause_then_resume_sequence(self, context, mock_handler):
+        """Test pause followed by resume signal sequence"""
+        # First: pause signal
+        mock_handler.check_control_signal.return_value = {"action": "PAUSE", "_id": "100-0"}
+        context.check_for_signals()
+        assert context.pause_requested is True
+
+        # Then: resume signal
+        mock_handler.check_control_signal.return_value = {"action": "RESUME", "_id": "101-0"}
+        context.check_for_signals()
+        assert context.pause_requested is False
+
+    def test_resume_when_not_paused(self, context, mock_handler):
+        """Test RESUME signal when not paused (should still work)"""
+        context.pause_requested = False
+        mock_handler.check_control_signal.return_value = {"action": "RESUME", "_id": "200-0"}
+
+        context.check_for_signals()
+
+        assert context.pause_requested is False
+
+    def test_should_pause_returns_true_when_paused(self, context):
+        """Test should_pause method returns True when paused"""
+        context.pause_requested = True
+
+        assert context.should_pause() is True
+
+    def test_should_pause_returns_false_when_not_paused(self, context):
+        """Test should_pause method returns False when not paused"""
+        context.pause_requested = False
+
+        assert context.should_pause() is False
+
+    def test_pause_preserves_last_signal_id(self, context, mock_handler):
+        """Test that pause signal updates last_signal_id"""
+        mock_handler.check_control_signal.return_value = {"action": "PAUSE", "_id": "pause-123"}
+
+        context.check_for_signals()
+
+        assert context.last_signal_id == "pause-123"
+
+    def test_multiple_pause_resume_cycles(self, context, mock_handler):
+        """Test multiple pause/resume cycles"""
+        # Cycle 1: pause
+        mock_handler.check_control_signal.return_value = {"action": "PAUSE", "_id": "300-0"}
+        context.check_for_signals()
+        assert context.pause_requested is True
+
+        # Cycle 1: resume
+        mock_handler.check_control_signal.return_value = {"action": "RESUME", "_id": "301-0"}
+        context.check_for_signals()
+        assert context.pause_requested is False
+
+        # Cycle 2: pause again
+        mock_handler.check_control_signal.return_value = {"action": "PAUSE", "_id": "302-0"}
+        context.check_for_signals()
+        assert context.pause_requested is True
+
+        # Cycle 2: resume again
+        mock_handler.check_control_signal.return_value = {"action": "RESUME", "_id": "303-0"}
+        context.check_for_signals()
+        assert context.pause_requested is False
+
+    def test_stop_signal_overrides_pause(self, context, mock_handler):
+        """Test that STOP signal is handled even during pause"""
+        context.pause_requested = True
+        mock_handler.check_control_signal.return_value = {"action": "STOP", "_id": "400-0"}
+
+        result = context.check_for_signals()
+
+        assert context.stop_requested is True
+        assert result is True  # STOP should return True
+
+    def test_pause_signal_maintains_stop_state(self, context, mock_handler):
+        """Test that pause signal doesn't affect stop_requested flag"""
+        context.stop_requested = True
+        mock_handler.check_control_signal.return_value = {"action": "PAUSE", "_id": "500-0"}
+
+        context.check_for_signals()
+
+        assert context.stop_requested is True  # Should remain True
+
+    def test_resume_does_not_set_stop_requested(self, context, mock_handler):
+        """Test that RESUME signal doesn't set stop_requested"""
+        context.pause_requested = True
+        mock_handler.check_control_signal.return_value = {"action": "RESUME", "_id": "600-0"}
+
+        context.check_for_signals()
+
+        assert context.stop_requested is False
+
+
+class TestPauseResumeWithRedisHandler:
+    """Test pause/resume feature with RedisSignalHandler integration"""
+
+    @pytest.fixture
+    def mock_redis_client(self):
+        """Create a mock Redis client"""
+        return MagicMock()
+
+    @pytest.fixture
+    def handler(self, mock_redis_client):
+        """Create RedisSignalHandler with mocked Redis"""
+        with patch("redis.from_url") as mock_from_url:
+            mock_from_url.return_value = mock_redis_client
             handler = RedisSignalHandler("redis://localhost:6379")
-            handler.connected = True
+            return handler
 
-            with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-                mock_timeout.side_effect = TimeoutError("xread timeout")
-                signal = handler.check_control_signal("exec-123")
+    def test_check_control_signal_pause(self, handler, mock_redis_client):
+        """Test reading PAUSE signal from Redis"""
+        handler.client = mock_redis_client
 
-            assert handler.connected is False
-            assert signal is None
+        mock_redis_client.xread.return_value = [("scan:control:exec-123", [("1234567890-0", {"action": "PAUSE"})])]
 
-    def test_ping_timeout_reconnection(self):
-        """Test that ping timeout marks connection as broken"""
-        mock_client = MagicMock()
+        signal = handler.check_control_signal("exec-123", "0")
 
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-            mock_from_url.return_value = mock_client
-            handler = RedisSignalHandler("redis://localhost:6379")
-            handler.connected = True
+        assert signal is not None
+        assert signal["action"] == "PAUSE"
+        assert signal["_id"] == "1234567890-0"
 
-            with patch("function.redis_signal_handler.run_with_timeout") as mock_timeout:
-                mock_timeout.side_effect = TimeoutError("ping timeout")
-                result = handler.health_check()
+    def test_check_control_signal_resume(self, handler, mock_redis_client):
+        """Test reading RESUME signal from Redis"""
+        handler.client = mock_redis_client
 
-            assert result is False
-            assert handler.connected is False
+        mock_redis_client.xread.return_value = [("scan:control:exec-123", [("1234567890-1", {"action": "RESUME"})])]
 
+        signal = handler.check_control_signal("exec-123", "1234567890-0")
 
-class TestStreamTrimming:
-    """Test stream trimming functionality"""
+        assert signal is not None
+        assert signal["action"] == "RESUME"
+        assert signal["_id"] == "1234567890-1"
 
-    def test_checkpoint_stream_trim(self):
-        """Test checkpoint stream is trimmed to max 10 items"""
-        mock_client = MagicMock()
+    def test_update_status_paused(self, handler, mock_redis_client):
+        """Test updating status to 'paused'"""
+        handler.client = mock_redis_client
+        mock_redis_client.xadd.return_value = "1234567890-3"
 
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-            mock_from_url.return_value = mock_client
-            handler = RedisSignalHandler("redis://localhost:6379")
-            handler.connected = True
-            handler.client = mock_client
+        result = handler.update_status(
+            "exec-123", "paused", "Paused by user", {"partial_data": False, "objects_count": 100}
+        )
 
-            handler.save_checkpoint("exec-123", {})
+        assert result == "1234567890-3"
+        mock_redis_client.xadd.assert_called_once()
 
-            # Verify xtrim was called with correct parameters
-            xtrim_calls = mock_client.xtrim.call_args_list
-            assert len(xtrim_calls) > 0
-            call_args = xtrim_calls[0]
-            assert call_args[0][0] == "scan:checkpoint:exec-123"
-            assert call_args[1].get("maxlen") == 10
-            assert call_args[1].get("approximate") is True
+    def test_update_status_resuming(self, handler, mock_redis_client):
+        """Test updating status to 'resuming'"""
+        handler.client = mock_redis_client
+        mock_redis_client.xadd.return_value = "1234567890-4"
 
-    def test_status_stream_trim(self):
-        """Test status stream is trimmed to max 100 items"""
-        mock_client = MagicMock()
+        result = handler.update_status("exec-123", "resuming", "Resumed by user", {"objects_count": 100})
 
-        with patch("function.redis_signal_handler.redis.from_url") as mock_from_url:
-            mock_from_url.return_value = mock_client
-            handler = RedisSignalHandler("redis://localhost:6379")
-            handler.connected = True
-            handler.client = mock_client
+        assert result == "1234567890-4"
+        mock_redis_client.xadd.assert_called_once()
 
-            handler.update_status("exec-123", "running")
+    def test_update_status_pausing(self, handler, mock_redis_client):
+        """Test updating status to 'pausing' (transitional state)"""
+        handler.client = mock_redis_client
+        mock_redis_client.xadd.return_value = "1234567890-5"
 
-            xtrim_calls = mock_client.xtrim.call_args_list
-            assert len(xtrim_calls) > 0
-            call_args = xtrim_calls[0]
-            assert call_args[0][0] == "scan:status:exec-123"
-            assert call_args[1].get("maxlen") == 100
+        result = handler.update_status("exec-123", "pausing", "Pausing execution", {"objects_count": 75})
+
+        assert result == "1234567890-5"

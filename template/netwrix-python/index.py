@@ -603,6 +603,79 @@ class Context:
             self.log.error("update_execution exception", error_msg=error_msg, error_type=type(e).__name__)
             return False, error_msg
 
+    def get_prior_execution(self, scan_execution_id: str) -> dict | None:
+        """
+        Query Postgres scan_executions table for prior execution with same scan_execution_id.
+
+        Used to detect if a scan is resuming from a paused state.
+
+        Args:
+            scan_execution_id: The execution ID to query
+
+        Returns:
+            dict with 'status' field if found, None if not found or on error
+        """
+        local_run = self.run_local == "true"
+
+        try:
+            # Query Postgres for scan execution status via app-data-query function
+            query = (
+                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{scan_execution_id}' LIMIT 1"
+            )
+            payload = {"query": query}
+
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            if local_run:
+                url = f"http://{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}:8080"
+                response = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                url = (
+                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}"
+                )
+                response = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    data = result.get("data", [])
+                    if data and len(data) > 0:
+                        execution_data = data[0]
+                        completed_objects = execution_data.get("completed_objects")
+                        if completed_objects > 0:
+                            self.log.info(
+                                "Retrieved prior execution",
+                                scan_execution_id=scan_execution_id,
+                                completed_objects=completed_objects,
+                                status=execution_data.get("status"),
+                            )
+                            return execution_data
+                    self.log.info("No prior execution found", scan_execution_id=scan_execution_id)
+                    return None
+                self.log.info(
+                    "Query failed", scan_execution_id=scan_execution_id, error=result.get("error", "Unknown error")
+                )
+                return None
+            self.log.info(
+                "Failed to query prior execution", status_code=response.status_code, response=response.text[:200]
+            )
+            return None
+
+        except Exception as e:
+            self.log.warning("Error querying prior execution", scan_execution_id=scan_execution_id, error=str(e))
+            return None
+
 
 class ContextLogger:
     def __init__(self, context: Context):
@@ -810,15 +883,24 @@ def call_handler(path: str):
                 if response_data["statusCode"] == 200:
                     response_data["body"]["startedAt"] = started_at
                     response_data["body"]["completedAt"] = completed_at
-                    # Check if handler already set a specific status (like 'stopped')
+                    # Check if handler already set a specific status (like 'stopped' or 'paused')
                     # If not, default to 'completed'
-                    if response_data.get("body", {}).get("status") == "stopped":
+                    response_status = response_data.get("body", {}).get("status")
+                    if response_status == "stopped":
                         # Scan was stopped, make sure execution status is updated
                         context.update_execution(status="stopped", completed_at=completed_at)
                         context.log.info(
                             "Scan was stopped",
                             function_type=context.function_type,
                             status="stopped",
+                        )
+                    elif response_status == "paused":
+                        # Scan was paused, make sure execution status is updated
+                        context.update_execution(status="paused")
+                        context.log.info(
+                            "Scan was paused",
+                            function_type=context.function_type,
+                            status="paused",
                         )
                     else:
                         # Normal completion - update to completed
@@ -935,10 +1017,14 @@ def run_as_job():
 
             if ctx.function_type in ("access-scan", "sync"):
                 if success:
-                    # Check if handler set a specific status (like 'stopped')
-                    if response.get("body", {}).get("status") == "stopped":
+                    # Check if handler set a specific status (like 'stopped' or 'paused')
+                    response_status = response.get("body", {}).get("status")
+                    if response_status == "stopped":
                         ctx.update_execution(status="stopped", completed_at=completed_at)
                         ctx.log.info("Operation was stopped", function_type=ctx.function_type, status="stopped")
+                    elif response_status == "paused":
+                        ctx.update_execution(status="paused", completed_at=completed_at)
+                        ctx.log.info("Operation was paused", function_type=ctx.function_type, status="paused")
                     else:
                         ctx.update_execution(status="completed", completed_at=completed_at)
                         ctx.log.info(

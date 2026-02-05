@@ -5,7 +5,6 @@ import os
 import signal
 import sys
 from collections.abc import Callable
-from datetime import UTC, datetime
 from logging.config import dictConfig
 from typing import Final
 
@@ -187,6 +186,7 @@ class Context:
         Note: For ThreadPoolExecutor, capture context before submitting and attach in worker.
         """
         import threading
+
         from opentelemetry import context as otel_context
 
         # Capture the current context
@@ -304,6 +304,7 @@ def format_response(resp):
 def health_openfaas():
     """OpenFaaS health check endpoint (watchdog convention)"""
     return jsonify(status="ok")
+
 
 @app.get("/health")
 def health():
