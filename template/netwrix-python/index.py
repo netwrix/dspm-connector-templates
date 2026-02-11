@@ -186,6 +186,9 @@ logger = get_logger(SERVICE_NAME)
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
 
+# Export get_service_url for use by handlers that need to call other services
+__all__ = ["get_service_url", "handler", "Context", "Event", "BatchManager"]
+
 
 # BatchManager is used to manage the batching of objects for a specific table. It will
 # automatically flush the batch when the size of the batch exceeds 1MB.
@@ -615,8 +618,6 @@ class Context:
         Returns:
             dict with 'status' field if found, None if not found or on error
         """
-        local_run = self.run_local == "true"
-
         try:
             # Query Postgres for scan execution status via app-data-query function
             query = (
@@ -627,24 +628,16 @@ class Context:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
-            if local_run:
-                url = f"http://{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}:8080"
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                url = (
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}"
-                )
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for app-data-query using standard routing
+            service_name = os.getenv("APP_DATA_QUERY_FUNCTION", "app-data-query")
+            url = get_service_url(service_name)
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code == 200:
                 result = response.json()
