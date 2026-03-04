@@ -72,7 +72,6 @@ WORKDIR /home/app/
 # Configure server and healthcheck
 USER app
 
-ARG SERVICE_NAME
 ENV SERVICE_NAME="${SERVICE_NAME}" \
     PORT=8080
 
