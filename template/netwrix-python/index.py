@@ -8,6 +8,12 @@ import os
 import signal
 import sys
 import threading
+
+# When index.py runs as __main__, register it under the name "index" so that
+# `from index import ...` in other modules resolves to the
+# already-loaded module instead of re-executing the file.
+sys.modules.setdefault("index", sys.modules[__name__])
+
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.config import dictConfig
