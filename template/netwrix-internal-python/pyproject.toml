@@ -42,3 +42,6 @@ select = [
 ignore = [
   "E501", # line too long (handled by line-length setting)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"index.py" = ["E402"]  # sys.modules include guard must run between imports
