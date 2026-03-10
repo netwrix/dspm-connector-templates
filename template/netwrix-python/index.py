@@ -548,6 +548,35 @@ class Context:
         # Create thread with wrapped target
         return threading.Thread(*args, target=wrapped_target, **kwargs)
 
+    def data_query(self, table: str, query: str) -> list[dict]:
+        """
+        Execute a SQL query against the data-query service and return the results.
+
+        Args:
+            table: The ClickHouse table name (used for logging context).
+            query: The SQL query string to execute.
+
+        Returns:
+            list[dict]: List of result rows as dictionaries.
+
+        Raises:
+            RuntimeError: If the query fails or the service returns an error.
+        """
+        headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+        service_name = os.getenv("DATA_QUERY_FUNCTION", "data-query")
+        url = get_service_url(service_name)
+
+        self.log.info(f"Querying data-query service", table=table)
+
+        response = requests.post(url, json={"query": query.strip()}, headers=headers, timeout=60)
+        response.raise_for_status()
+
+        result = response.json()
+        if not result.get("success"):
+            raise RuntimeError(f"data-query failed for table '{table}': {result.get('error', 'Unknown error')}")
+
+        return result.get("data", [])
+
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
         if table not in self.tables:
