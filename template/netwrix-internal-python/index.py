@@ -1,8 +1,4 @@
 #!/usr/bin/env python
-import json
-import logging
-import os
-import signal
 import sys
 
 # When index.py runs as __main__, register it under the name "index" so that
@@ -10,6 +6,10 @@ import sys
 # already-loaded module instead of re-executing the file.
 sys.modules.setdefault("index", sys.modules[__name__])
 
+import json
+import logging
+import os
+import signal
 from collections.abc import Callable
 from logging.config import dictConfig
 from typing import Final

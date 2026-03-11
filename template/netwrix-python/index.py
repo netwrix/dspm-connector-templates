@@ -1,19 +1,19 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
-import base64
-import json
-import logging
-import os
-import signal
 import sys
-import threading
 
 # When index.py runs as __main__, register it under the name "index" so that
 # `from index import ...` in other modules resolves to the
 # already-loaded module instead of re-executing the file.
 sys.modules.setdefault("index", sys.modules[__name__])
 
+import base64
+import json
+import logging
+import os
+import signal
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.config import dictConfig
