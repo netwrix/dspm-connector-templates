@@ -1,11 +1,11 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
-using System.Net;
-using System.Text;
-using System.Text.Json;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;

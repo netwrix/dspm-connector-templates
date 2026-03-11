@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Netwrix.Overlord.Sdk.Core.Storage;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -142,6 +143,7 @@ internal static class Program
 
         // FunctionContext depends on ConnectorRequestData (scoped)
         services.AddScoped<FunctionContext>();
+        services.AddScoped<IStateStorage, ConnectorStateStorage>();
 
         if (isHttpMode)
         {
@@ -154,13 +156,17 @@ internal static class Program
             // CreateBackgroundScope() or RunJobModeAsync() respectively.
             var holder = sp.GetRequiredService<RequestDataHolder>();
             if (holder.IsSet)
+            {
                 return holder.Data;
+            }
 
             var http = sp.GetService<IHttpContextAccessor>()?.HttpContext;
             if (http is null)
+            {
                 throw new InvalidOperationException(
                     "ConnectorRequestData cannot be resolved outside of an HTTP request context. " +
                     "Use IServiceScopeFactory.CreateBackgroundScope(requestData) for background scopes.");
+            }
 
             // Body was pre-read by the middleware into HttpContext.Items to avoid sync I/O in the factory.
             var body = http.Items["_body"] as byte[];

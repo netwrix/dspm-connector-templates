@@ -1,7 +1,7 @@
+using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
-using System.Net;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
