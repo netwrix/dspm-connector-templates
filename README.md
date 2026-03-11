@@ -9,11 +9,9 @@ Function templates for building DSPM connectors. Each template provides the runt
 | `netwrix-python` | Python 3.12 | External source and IAM connectors |
 | `netwrix-internal-python` | Python 3.12 | Internal common platform functions |
 | `netwrix-csharp` | C# / .NET 8 | External source and IAM connectors |
-| `netwrix-internal-csharp` | C# / .NET 8 | Internal common platform functions |
 
 ## Prerequisites
 
-- [faas-cli](https://github.com/openfaas/faas-cli) to scaffold and build connector functions
 - Docker (for building container images)
 - .NET 8 SDK (for C# templates)
 - Python 3.12 + [uv](https://github.com/astral-sh/uv) (for Python templates)
@@ -33,7 +31,7 @@ functions:
 ### Template selection
 
 - Use `netwrix-python` or `netwrix-csharp` for connectors that scan external data sources and ingest data into ClickHouse.
-- Use `netwrix-internal-python` or `netwrix-internal-csharp` for internal platform functions that do not scan external sources.
+- Use `netwrix-internal-python` for internal platform functions that do not scan external sources.
 
 ## Template Features
 

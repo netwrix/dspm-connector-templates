@@ -40,7 +40,7 @@ A component that manages the lifecycle states of a running scan: `running → st
 
 ## Template
 
-A reusable scaffold registered with `faas-cli` that connector repositories pull at build time. A template defines the `Dockerfile`, the runtime entrypoint (`index.py` or `Program.cs`), and framework files (`StateManager`, `BatchManager`, etc.). Connector authors only provide their `handler.py` or `Handler.cs` and a `requirements.txt` / `Function.csproj`.
+A reusable scaffold that connector repositories pull at build time. A template defines the `Dockerfile`, the runtime entrypoint (`index.py` or `Program.cs`), and framework files (`StateManager`, `BatchManager`, etc.). Connector authors only provide their `handler.py` or `Handler.cs` and a `requirements.txt` / `Function.csproj`.
 
 ## uv
 
