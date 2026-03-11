@@ -61,7 +61,7 @@ graph TD
 
     subgraph "Platform Services"
         G[data-ingestion service]
-        H[Redis Streams<br/>scan:control:{id}<br/>scan:status:{id}]
+        H["Redis Streams<br/>scan:control:#123;id#125;<br/>scan:status:#123;id#125;"]
         I[app-update-execution service]
         J[OTLP Collector<br/>Grafana / OpenTelemetry]
         K[Core API<br/>connector-api]
