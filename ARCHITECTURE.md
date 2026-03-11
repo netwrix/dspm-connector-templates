@@ -34,6 +34,12 @@
 │   │   ├── function/
 │   │   │   └── Handler.cs           # Connector author implements IConnectorHandler here
 │   │   └── Dockerfile
+│   └── netwrix-internal-csharp/     # C# template for internal functions
+│       ├── Program.cs               # HTTP server bootstrap
+│       ├── FunctionContext.cs       # Simplified context (logging, secrets, OTel)
+│       ├── FunctionRequest.cs
+│       ├── FunctionResponse.cs
+│       └── Dockerfile
 ├── docs/
 │   └── STOP_PAUSE_RESUME_GUIDE.md  # Implementation guide
 └── .github/
@@ -91,6 +97,12 @@ graph TD
 **Technologies:** .NET 8, ASP.NET Core, StackExchange.Redis, OpenTelemetry .NET SDK
 
 **Key files:** `ConnectorFramework/Program.cs`, `ConnectorFramework/FunctionContext.cs`, `ConnectorFramework/IConnectorHandler.cs`, `function/Handler.cs` (connector author fills this)
+
+### 3.4. netwrix-internal-csharp
+
+**Description:** C# template for internal platform functions. Provides HTTP server bootstrap and a simplified `FunctionContext` with structured logging and secrets, but no `BatchManager` or `StateManager`. Suited for request/response functions that do not perform long-running scans.
+
+**Technologies:** .NET 8, ASP.NET Core, OpenTelemetry .NET SDK
 
 ## 4. Data Stores
 
