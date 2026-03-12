@@ -61,6 +61,29 @@ All templates export distributed traces, metrics, and logs to an OTLP-compatible
 
 Secrets are loaded from files mounted at `/var/secrets/{name}` (connector-api) or `/var/openfaas/secrets/{name}` (fallback). Access them via `context.Secrets["name"]` (C#) or `context.secrets["name"]` (Python).
 
+## Build
+
+### Python templates
+
+Python templates do not require a separate build step — dependencies are installed at container build time via `uv sync` in the Dockerfile.
+
+```bash
+docker build -t my-connector:latest -f template/netwrix-python/Dockerfile .
+```
+
+### C# templates
+
+```bash
+cd template/netwrix-csharp
+dotnet build ConnectorFramework/ConnectorFramework.csproj
+```
+
+Or build the container image directly:
+
+```bash
+docker build -t my-connector:latest -f template/netwrix-csharp/Dockerfile .
+```
+
 ## Develop
 
 ### Python templates
@@ -97,6 +120,10 @@ The CI pipeline runs `ruff check` and `ruff format --check` on every push/PR to 
 cd template/netwrix-csharp
 dotnet test ConnectorFramework.Tests/ConnectorFramework.Tests.csproj
 ```
+
+## Deploy
+
+Connector containers are built as multi-stage Docker images and distributed via the Keygen OCI registry (`oci.pkg.keygen.sh`). Connector repositories reference these templates in their `stack.yml`, and images are built and pushed by CI/CD pipelines. Set `EXECUTION_MODE=job` for Kubernetes Job deployments or leave unset for long-running HTTP server mode.
 
 ## Contributing
 

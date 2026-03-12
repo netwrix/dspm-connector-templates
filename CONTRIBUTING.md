@@ -27,13 +27,20 @@ If a template produces unexpected runtime behaviour, incorrect OpenTelemetry out
 
 ### Suggesting Enhancements
 
+#### Before Submitting an Enhancement
+
 Before implementing a template change, open an issue to discuss it. Template changes affect every connector built from that template, so breaking changes to the `FunctionContext` API, `IConnectorHandler` interface, or `handler.py` / `Handler.cs` signatures require careful consideration.
+
+Check existing issues and pull requests to make sure the enhancement has not already been proposed or implemented.
+
+#### How Do I Submit a Good Enhancement Suggestion?
 
 Good enhancement proposals include:
 
 - A clear description of the problem being solved
 - The proposed API change and why it cannot be addressed at the connector level
 - Any impact on existing connectors
+- Example code or pseudocode showing the desired usage, if applicable
 
 ### Your First Code Contribution
 
