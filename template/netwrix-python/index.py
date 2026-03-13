@@ -573,10 +573,15 @@ class Context:
         base_url = os.getenv("CORE_API_INTERNAL_URL", "http://core-api:3000")
         url = f"{base_url}/api/v1/scan-executions/{self.parent_execution_id}/run-process"
 
+        headers = {"Content-Type": "application/json"}
+        api_key = os.getenv("CONNECTOR_API_KEY", "")
+        if api_key:
+            headers["X-Api-Key"] = api_key
+
         response = requests.post(
             url,
             json={"processKey": process_key},
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             timeout=30,
         )
         response.raise_for_status()
