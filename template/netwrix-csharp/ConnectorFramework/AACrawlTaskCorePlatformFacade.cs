@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using Microsoft.Extensions.Logging;
 using Netwrix.ConnectorFramework;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;

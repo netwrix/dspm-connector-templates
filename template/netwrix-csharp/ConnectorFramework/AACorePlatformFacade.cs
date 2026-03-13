@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
 using Netwrix.ConnectorFramework;
 using Netwrix.Overlord.Sdk.Cloud;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
@@ -89,7 +88,9 @@ public class AACorePlatformFacade : ICorePlatformFacade
         if (isFinal)
         {
             _logger.LogInformation("Final upload — flushing all pending batches");
-            await FunctionContext.FlushTablesAsync();
+            // CancellationToken.None is intentional: a final flush must not be abandoned even
+            // if the scan has been cancelled — data already buffered must reach the ingestion service.
+            await FunctionContext.FlushTablesAsync(CancellationToken.None);
         }
     }
 }
