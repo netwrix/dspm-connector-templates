@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Netwrix.Overlord.Sdk.Core.Storage;
 
 namespace Netwrix.ConnectorFramework;
 
@@ -16,6 +17,7 @@ public sealed class FunctionContext : IAsyncDisposable
     private readonly ILogger<FunctionContext> _logger;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BatchManager> _tables = new();
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IStateStorage _stateStorage;
 
     public ConnectorRequestData Request { get; }
     public string? ScanId => Request.ScanId;
@@ -24,18 +26,23 @@ public sealed class FunctionContext : IAsyncDisposable
     /// <summary>Structured logger with automatic scan-context enrichment.</summary>
     public ILogger Log => _logger;
 
+    /// <summary>Typed key/value storage backed by the connector-state service.</summary>
+    public IStateStorage StateStorage => _stateStorage;
+
     public FunctionContext(
         ConnectorRequestData request,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
         ILogger<FunctionContext> logger,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IStateStorage stateStorage)
     {
         Request = request;
         _configuration = configuration;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _loggerFactory = loggerFactory;
+        _stateStorage = stateStorage;
     }
 
     // ── Secrets ───────────────────────────────────────────────────────────────
@@ -269,42 +276,18 @@ public sealed class FunctionContext : IAsyncDisposable
             return null;
         }
 
-        var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
-        var url = $"{serviceUrl}?scanId={Uri.EscapeDataString(ScanId)}";
-
         try
         {
-            using var client = _httpClientFactory.CreateClient("connector-state");
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            foreach (var (k, v) in GetCallerHeaders())
+            var result = new Dictionary<string, string>();
+            await foreach (var key in _stateStorage.ListAllKeysAsync("", ct))
             {
-                request.Headers.TryAddWithoutValidation(k, v);
+                var r = await _stateStorage.TryGetAsync<string>(key, ct);
+                if (r.IsSuccess)
+                {
+                    result[key] = r.Value;
+                }
             }
-
-            var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("GetConnectorState returned {StatusCode}", (int)response.StatusCode);
-                return null;
-            }
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
-            {
-                var error = root.TryGetProperty("error", out var errProp) ? errProp.GetString() : "Unknown error";
-                _logger.LogWarning("GetConnectorState failed: {Error}", error);
-                return null;
-            }
-
-            if (root.TryGetProperty("data", out var dataProp))
-            {
-                return dataProp.Deserialize<Dictionary<string, string>>();
-            }
-
-            return new Dictionary<string, string>();
+            return result;
         }
         catch (Exception ex)
         {
@@ -324,25 +307,14 @@ public sealed class FunctionContext : IAsyncDisposable
             return;
         }
 
-        var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
-        var payload = new { scanId = ScanId, data };
-
         try
         {
-            using var client = _httpClientFactory.CreateClient("connector-state");
-            using var request = new HttpRequestMessage(HttpMethod.Post, serviceUrl)
+            foreach (var (key, value) in data)
             {
-                Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json"),
-            };
-            foreach (var (k, v) in GetCallerHeaders())
-            {
-                request.Headers.TryAddWithoutValidation(k, v);
-            }
-
-            var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("SetConnectorState returned {StatusCode}", (int)response.StatusCode);
+                if (value is not null)
+                {
+                    await _stateStorage.SetAsync<object>(key, value, ct);
+                }
             }
         }
         catch (Exception ex)
@@ -363,28 +335,18 @@ public sealed class FunctionContext : IAsyncDisposable
             return;
         }
 
-        var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
-        var qs = $"?scanId={Uri.EscapeDataString(ScanId)}";
-        if (names is { Length: > 0 })
-        {
-            qs += string.Concat(names.Select(n => $"&name[]={Uri.EscapeDataString(n)}"));
-        }
-
-        var url = serviceUrl + qs;
-
         try
         {
-            using var client = _httpClientFactory.CreateClient("connector-state");
-            using var request = new HttpRequestMessage(HttpMethod.Delete, url);
-            foreach (var (k, v) in GetCallerHeaders())
+            if (names is null or { Length: 0 })
             {
-                request.Headers.TryAddWithoutValidation(k, v);
+                await _stateStorage.DeleteAllAsync("", ct);
             }
-
-            var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
+            else
             {
-                _logger.LogWarning("DeleteConnectorState returned {StatusCode}", (int)response.StatusCode);
+                foreach (var name in names)
+                {
+                    await _stateStorage.DeleteAsync(name, ct);
+                }
             }
         }
         catch (Exception ex)

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
+using Netwrix.Overlord.Sdk.Core.Storage;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -20,15 +21,24 @@ public class FunctionContextTests
     private static FunctionContext CreateContext(
         IHttpClientFactory? factory = null,
         string? scanId = "scan-abc",
-        string? execId = "exec-xyz")
+        string? execId = "exec-xyz",
+        IStateStorage? stateStorage = null)
     {
         factory ??= Mock.Of<IHttpClientFactory>();
+        stateStorage ??= Mock.Of<IStateStorage>();
         return new FunctionContext(
             MakeRequest(scanId, execId),
             new ConfigurationBuilder().Build(),
             factory,
             NullLogger<FunctionContext>.Instance,
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            stateStorage);
+    }
+
+    private static async IAsyncEnumerable<string> ToAsyncKeys(params string[] keys)
+    {
+        foreach (var k in keys) yield return k;
+        await Task.CompletedTask;
     }
 
     private static (Mock<HttpMessageHandler> HandlerMock, IHttpClientFactory Factory) CreateFactory(
@@ -123,31 +133,19 @@ public class FunctionContextTests
     // ── GetConnectorStateAsync ───────────────────────────────────────────────
 
     [Fact]
-    public async Task GetConnectorStateAsync_SendsGetWithScanId()
+    public async Task GetConnectorStateAsync_ReturnsDictionaryFromStorage()
     {
-        HttpRequestMessage? captured = null;
-        var handlerMock = new Mock<HttpMessageHandler>();
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .Callback<HttpRequestMessage, CancellationToken>((req, _) => { captured = req; })
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(new { success = true, data = new { key1 = "val1" } }),
-                    Encoding.UTF8, "application/json"),
-            });
+        var storageMock = new Mock<IStateStorage>();
+        storageMock
+            .Setup(s => s.ListAllKeysAsync("", It.IsAny<CancellationToken>()))
+            .Returns(ToAsyncKeys("key1"));
+        storageMock
+            .Setup(s => s.TryGetAsync<string>("key1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TryGetResult<string>("val1", null));
 
-        var client = new HttpClient(handlerMock.Object);
-        var factoryMock = new Mock<IHttpClientFactory>();
-        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
-
-        await using var ctx = CreateContext(factoryMock.Object, scanId: "scan-42");
+        await using var ctx = CreateContext(scanId: "scan-42", stateStorage: storageMock.Object);
         var result = await ctx.GetConnectorStateAsync();
 
-        Assert.Equal(HttpMethod.Get, captured!.Method);
-        Assert.Contains("scanId=scan-42", captured.RequestUri!.ToString());
         Assert.NotNull(result);
         Assert.Equal("val1", result!["key1"]);
     }
@@ -155,103 +153,67 @@ public class FunctionContextTests
     [Fact]
     public async Task GetConnectorStateAsync_ReturnsNull_WhenScanIdIsNull()
     {
-        await using var ctx = CreateContext(scanId: null);
+        var storageMock = new Mock<IStateStorage>();
+        await using var ctx = CreateContext(scanId: null, stateStorage: storageMock.Object);
         var result = await ctx.GetConnectorStateAsync();
         Assert.Null(result);
+        storageMock.Verify(s => s.ListAllKeysAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── SetConnectorStateAsync ───────────────────────────────────────────────
 
     [Fact]
-    public async Task SetConnectorStateAsync_SendsPostWithScanIdAndData()
+    public async Task SetConnectorStateAsync_CallsSetAsyncForEachKey()
     {
-        byte[]? body = null;
-        HttpRequestMessage? captured = null;
-        var handlerMock = new Mock<HttpMessageHandler>();
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .Callback<HttpRequestMessage, CancellationToken>(async (req, _) =>
-            {
-                captured = req;
-                body = await req.Content!.ReadAsByteArrayAsync();
-            })
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
+        var storageMock = new Mock<IStateStorage>();
+        storageMock
+            .Setup(s => s.SetAsync<object>(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
-        var client = new HttpClient(handlerMock.Object);
-        var factoryMock = new Mock<IHttpClientFactory>();
-        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
-
-        await using var ctx = CreateContext(factoryMock.Object, scanId: "scan-42");
+        await using var ctx = CreateContext(scanId: "scan-42", stateStorage: storageMock.Object);
         await ctx.SetConnectorStateAsync(new Dictionary<string, object?> { ["cursor"] = "abc" });
 
-        Assert.Equal(HttpMethod.Post, captured!.Method);
-        Assert.NotNull(body);
-        var json = Encoding.UTF8.GetString(body!);
-        Assert.Contains("scan-42", json);
-        Assert.Contains("cursor", json);
-        Assert.Contains("abc", json);
+        storageMock.Verify(s => s.SetAsync<object>("cursor", "abc", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public async Task SetConnectorStateAsync_SkipsWhenScanIdIsNull()
     {
-        var factoryMock = new Mock<IHttpClientFactory>();
-        await using var ctx = CreateContext(factoryMock.Object, scanId: null);
+        var storageMock = new Mock<IStateStorage>();
+        await using var ctx = CreateContext(scanId: null, stateStorage: storageMock.Object);
         await ctx.SetConnectorStateAsync(new Dictionary<string, object?> { ["x"] = "y" });
-        factoryMock.Verify(f => f.CreateClient(It.IsAny<string>()), Times.Never);
+        storageMock.Verify(s => s.SetAsync<object>(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── DeleteConnectorStateAsync ────────────────────────────────────────────
 
     [Fact]
-    public async Task DeleteConnectorStateAsync_SendsDeleteWithScanId()
+    public async Task DeleteConnectorStateAsync_CallsDeleteAllAsync_WhenNamesIsNull()
     {
-        HttpRequestMessage? captured = null;
-        var handlerMock = new Mock<HttpMessageHandler>();
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .Callback<HttpRequestMessage, CancellationToken>((req, _) => { captured = req; })
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
+        var storageMock = new Mock<IStateStorage>();
+        storageMock
+            .Setup(s => s.DeleteAllAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
-        var client = new HttpClient(handlerMock.Object);
-        var factoryMock = new Mock<IHttpClientFactory>();
-        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
-
-        await using var ctx = CreateContext(factoryMock.Object, scanId: "scan-42");
+        await using var ctx = CreateContext(scanId: "scan-42", stateStorage: storageMock.Object);
         await ctx.DeleteConnectorStateAsync();
 
-        Assert.Equal(HttpMethod.Delete, captured!.Method);
-        Assert.Contains("scanId=scan-42", captured.RequestUri!.ToString());
-        Assert.DoesNotContain("name", captured.RequestUri!.ToString());
+        storageMock.Verify(s => s.DeleteAllAsync("", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task DeleteConnectorStateAsync_IncludesNamesInQueryString()
+    public async Task DeleteConnectorStateAsync_CallsDeleteAsyncForEachName()
     {
-        HttpRequestMessage? captured = null;
-        var handlerMock = new Mock<HttpMessageHandler>();
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .Callback<HttpRequestMessage, CancellationToken>((req, _) => { captured = req; })
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
+        var storageMock = new Mock<IStateStorage>();
+        storageMock
+            .Setup(s => s.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
-        var client = new HttpClient(handlerMock.Object);
-        var factoryMock = new Mock<IHttpClientFactory>();
-        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
-
-        await using var ctx = CreateContext(factoryMock.Object, scanId: "scan-42");
+        await using var ctx = CreateContext(scanId: "scan-42", stateStorage: storageMock.Object);
         await ctx.DeleteConnectorStateAsync(new[] { "key1", "key2" });
 
-        var url = captured!.RequestUri!.ToString();
-        // .NET Uri may keep [] unencoded or percent-encode them — accept both forms
-        Assert.True(url.Contains("name%5B%5D=key1") || url.Contains("name[]=key1"), $"Expected name[]=key1 in: {url}");
-        Assert.True(url.Contains("name%5B%5D=key2") || url.Contains("name[]=key2"), $"Expected name[]=key2 in: {url}");
+        storageMock.Verify(s => s.DeleteAsync("key1", It.IsAny<CancellationToken>()), Times.Once);
+        storageMock.Verify(s => s.DeleteAsync("key2", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── GetPriorExecutionAsync ───────────────────────────────────────────────
@@ -409,7 +371,8 @@ public class FunctionContextTests
                 new ConfigurationBuilder().Build(),
                 Mock.Of<IHttpClientFactory>(),
                 loggerMock.Object,
-                NullLoggerFactory.Instance);
+                NullLoggerFactory.Instance,
+                Mock.Of<IStateStorage>());
 
             var secrets = ctx.Secrets;
 
