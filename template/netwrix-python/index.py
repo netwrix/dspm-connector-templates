@@ -47,8 +47,8 @@ dictConfig(
 
 SOURCE_TYPE: Final = os.getenv("SOURCE_TYPE", "internal")
 FUNCTION_TYPE: Final = os.getenv("FUNCTION_TYPE", "netwrix")
-_process_key: Final = os.getenv("POST_PROCESSING_KEY")
-SERVICE_NAME: Final = f"{SOURCE_TYPE}-{_process_key}" if _process_key else f"{SOURCE_TYPE}-{FUNCTION_TYPE}"
+PROCESS_KEY: Final = os.getenv("POST_PROCESSING_KEY")
+SERVICE_NAME: Final = f"{SOURCE_TYPE}-{PROCESS_KEY}" if PROCESS_KEY else f"{SOURCE_TYPE}-{FUNCTION_TYPE}"
 
 # Common functions base URL - defaults to access-analyzer namespace K8s services
 # For local development, set to appropriate docker-compose service names
