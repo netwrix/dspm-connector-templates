@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -12,14 +13,18 @@ namespace Netwrix.ConnectorFramework;
 
 internal static class Program
 {
+    private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
+
     public static async Task<int> Main(string[] args)
     {
-        var executionMode = Environment.GetEnvironmentVariable("EXECUTION_MODE");
-
-        return executionMode == "job"
+        return IsJobMode()
             ? await RunJobModeAsync(args)
             : await RunHttpModeAsync(args);
     }
+
+    internal static bool IsJobMode() =>
+        Environment.GetEnvironmentVariable("EXECUTION_MODE") == "job" ||
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("REQUEST_DATA"));
 
     // ── HTTP mode ─────────────────────────────────────────────────────────────
 
@@ -41,6 +46,35 @@ internal static class Program
         builder.WebHost.UseUrls($"http://+:{port}");
 
         var app = builder.Build();
+
+        var requestLogger = app.Services
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Netwrix.ConnectorFramework.Program");
+
+        app.Use(async (ctx, next) =>
+        {
+            using var activity = ActivitySource.StartActivity("process_request");
+            requestLogger.LogInformation(
+                "Received request {Method} {Path}",
+                ctx.Request.Method, ctx.Request.Path.Value);
+            try
+            {
+                await next(ctx);
+                activity?.SetStatus(ActivityStatusCode.Ok);
+                requestLogger.LogInformation(
+                    "Request completed {StatusCode}",
+                    ctx.Response.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.RecordException(ex);
+                requestLogger.LogError(ex,
+                    "Request failed {Method} {Path}",
+                    ctx.Request.Method, ctx.Request.Path.Value);
+                throw;
+            }
+        });
 
         // Enable buffering and eagerly read the body so the DI factory can access it synchronously.
         app.Use(async (ctx, next) =>
@@ -80,9 +114,12 @@ internal static class Program
 
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Netwrix.ConnectorFramework.Program");
         int exitCode;
+        Activity? jobActivity = null;
         try
         {
             await using var scope = host.Services.CreateAsyncScope();
+
+            jobActivity = ActivitySource.StartActivity("job_execution");
 
             var requestData = BuildJobRequestData();
             // Make the job-mode request data available to scoped services
@@ -92,16 +129,34 @@ internal static class Program
             var handlerInstance = scope.ServiceProvider.GetRequiredService<IConnectorHandler>();
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
-            var result = await handlerInstance.HandleJobAsync(requestData, context, lifetime.ApplicationStopping);
+            logger.LogInformation(
+                "Starting job execution executionMode=job functionType={FunctionType} scanId={ScanId} scanExecutionId={ScanExecutionId}",
+                Environment.GetEnvironmentVariable("FUNCTION_TYPE"),
+                requestData.ScanId,
+                requestData.ScanExecutionId);
+
+            object result;
+            using (var handleActivity = ActivitySource.StartActivity("handle_request"))
+            {
+                result = await handlerInstance.HandleJobAsync(requestData, context, lifetime.ApplicationStopping);
+            }
             await context.FlushTablesAsync();
+
+            jobActivity?.SetStatus(ActivityStatusCode.Ok);
 
             Console.WriteLine(JsonSerializer.Serialize(result));
             exitCode = 0;
         }
         catch (Exception ex)
         {
+            jobActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            jobActivity?.RecordException(ex);
             logger.LogError(ex, "Job failed");
             exitCode = 1;
+        }
+        finally
+        {
+            jobActivity?.Dispose();
         }
 
         await host.StopAsync(); // flushes OTEL BatchSpanProcessor
@@ -143,6 +198,8 @@ internal static class Program
 
         // FunctionContext depends on ConnectorRequestData (scoped)
         services.AddScoped<FunctionContext>();
+        services.AddScoped<IScanWriter>(sp => sp.GetRequiredService<FunctionContext>());
+        services.AddScoped<IScanProgress>(sp => sp.GetRequiredService<FunctionContext>());
         services.AddScoped<IStateStorage, ConnectorStateStorage>();
 
         if (isHttpMode)
@@ -187,7 +244,7 @@ internal static class Program
 
     private static void RegisterOpenTelemetry(
         IServiceCollection services,
-        ILoggingBuilder? loggingBuilder,
+        ILoggingBuilder? _,
         bool isHttpMode)
     {
         if (Environment.GetEnvironmentVariable("OTEL_ENABLED")?.ToLowerInvariant() == "false")
@@ -307,6 +364,15 @@ internal static class Program
         return ms.ToArray();
     }
 
+    internal static string BuildRequestPath()
+    {
+        var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE");
+        var derivedPath = functionType != null
+            ? $"/connector/{functionType.Replace("-", "_", StringComparison.Ordinal)}"
+            : "/connector/test_connection";
+        return Environment.GetEnvironmentVariable("REQUEST_PATH") ?? derivedPath;
+    }
+
     private static ConnectorRequestData BuildJobRequestData()
     {
         var requestDataJson = Environment.GetEnvironmentVariable("REQUEST_DATA") ?? "{}";
@@ -314,7 +380,7 @@ internal static class Program
 
         return new ConnectorRequestData(
             Method: "POST",
-            Path: Environment.GetEnvironmentVariable("REQUEST_PATH") ?? "/connector/test_connection",
+            Path: BuildRequestPath(),
             Headers: new Dictionary<string, string>(),
             Body: body,
             ScanId: Environment.GetEnvironmentVariable("SCAN_ID"),
