@@ -14,7 +14,8 @@ public class ConnectorStateStorageTests
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static ConnectorRequestData MakeRequest(string? scanId = "scan-test")
-        => new("POST", "/", new Dictionary<string, string>(), null, scanId, null);
+        => new("POST", "/", new Dictionary<string, string>(), null,
+            new ExecutionContext(ScanId: scanId, ScanExecutionId: null, SourceId: null, SourceType: null, SourceVersion: null, FunctionType: null));
 
     private static ConnectorStateStorage CreateStorage(IHttpClientFactory factory, string? scanId = "scan-test")
         => new(MakeRequest(scanId), factory, NullLogger<ConnectorStateStorage>.Instance);

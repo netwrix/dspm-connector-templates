@@ -9,7 +9,8 @@ namespace Netwrix.ConnectorFramework.Tests;
 public class BatchManagerTests
 {
     private static ConnectorRequestData MakeRequest(string? scanId = "scan-1", string? execId = "exec-1")
-        => new("POST", "/connector/access_scan", new Dictionary<string, string>(), null, scanId, execId);
+        => new("POST", "/connector/access_scan", new Dictionary<string, string>(), null,
+            new ExecutionContext(ScanId: scanId, ScanExecutionId: execId, SourceId: null, SourceType: null, SourceVersion: null, FunctionType: null));
 
     private static BatchManager CreateBatchManager(
         IHttpClientFactory? httpFactory = null,

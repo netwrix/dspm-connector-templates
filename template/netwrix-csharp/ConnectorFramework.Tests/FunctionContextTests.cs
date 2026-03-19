@@ -16,7 +16,8 @@ public class FunctionContextTests
     private static ConnectorRequestData MakeRequest(
         string? scanId = "scan-abc",
         string? execId = "exec-xyz")
-        => new("POST", "/connector/access_scan", new Dictionary<string, string>(), null, scanId, execId);
+        => new("POST", "/connector/access_scan", new Dictionary<string, string>(), null,
+            new ExecutionContext(ScanId: scanId, ScanExecutionId: execId, SourceId: null, SourceType: null, SourceVersion: null, FunctionType: null));
 
     private static FunctionContext CreateContext(
         IHttpClientFactory? factory = null,
@@ -37,7 +38,11 @@ public class FunctionContextTests
 
     private static async IAsyncEnumerable<string> ToAsyncKeys(params string[] keys)
     {
-        foreach (var k in keys) yield return k;
+        foreach (var k in keys)
+        {
+            yield return k;
+        }
+
         await Task.CompletedTask;
     }
 
@@ -218,6 +223,9 @@ public class FunctionContextTests
 
     // ── GetPriorExecutionAsync ───────────────────────────────────────────────
 
+    // scanExecutionId must be a valid GUID — the framework validates format before querying.
+    private const string PriorExecId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
     [Fact]
     public async Task GetPriorExecutionAsync_ReturnsExecution_WhenFound()
     {
@@ -226,17 +234,17 @@ public class FunctionContextTests
             success = true,
             data = new[]
             {
-                new { id = "exec-prior", status = "paused", completed_objects = 42 },
+                new { id = PriorExecId, status = "paused", completed_objects = 42 },
             },
         });
 
         var (_, factory) = CreateFactory(responseBody);
         await using var ctx = CreateContext(factory);
 
-        var result = await ctx.GetPriorExecutionAsync("exec-prior");
+        var result = await ctx.GetPriorExecutionAsync(PriorExecId);
 
         Assert.NotNull(result);
-        Assert.Equal("exec-prior", result!.Id);
+        Assert.Equal(PriorExecId, result!.Id);
         Assert.Equal("paused", result.Status);
         Assert.Equal(42, result.CompletedObjects);
     }
@@ -248,7 +256,7 @@ public class FunctionContextTests
         var (_, factory) = CreateFactory(responseBody);
         await using var ctx = CreateContext(factory);
 
-        var result = await ctx.GetPriorExecutionAsync("exec-prior");
+        var result = await ctx.GetPriorExecutionAsync(PriorExecId);
 
         Assert.Null(result);
     }
@@ -261,15 +269,24 @@ public class FunctionContextTests
             success = true,
             data = new[]
             {
-                new { id = "exec-prior", status = "paused", completed_objects = 0 },
+                new { id = PriorExecId, status = "paused", completed_objects = 0 },
             },
         });
 
         var (_, factory) = CreateFactory(responseBody);
         await using var ctx = CreateContext(factory);
 
-        var result = await ctx.GetPriorExecutionAsync("exec-prior");
+        var result = await ctx.GetPriorExecutionAsync(PriorExecId);
 
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorExecutionAsync_ReturnsNull_WhenIdIsNotAGuid()
+    {
+        // Non-GUID IDs must be rejected before issuing any HTTP request.
+        await using var ctx = CreateContext();
+        var result = await ctx.GetPriorExecutionAsync("not-a-guid");
         Assert.Null(result);
     }
 
@@ -298,12 +315,12 @@ public class FunctionContextTests
         factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
 
         await using var ctx = CreateContext(factoryMock.Object);
-        await ctx.GetPriorExecutionAsync("exec-prior-123");
+        await ctx.GetPriorExecutionAsync(PriorExecId);
 
         Assert.NotNull(body);
         var json = Encoding.UTF8.GetString(body!);
         Assert.Contains("scan_executions", json);
-        Assert.Contains("exec-prior-123", json);
+        Assert.Contains(PriorExecId, json);
     }
 
     [Fact]
