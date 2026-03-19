@@ -1,32 +1,69 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using Netwrix.ConnectorFramework;
+using System.Text.Json.Nodes;
+using Netwrix.Overlord.Sdk.Cloud;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models.Api;
+using Netwrix.Overlord.Sdk.Core.Activity.Models;
+using Netwrix.Overlord.Sdk.Core.State.Models;
 
-namespace Netwrix.Connector;
+namespace Netwrix.ConnectorFramework;
 
-public class AACrawlTaskCorePlatformFacade : AACorePlatformFacade, ICrawlTaskManagementPlatformFacade
+public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlTaskManagementPlatformFacade
 {
     private const int MaxUpdateIntervalMinutes = 5;
+
+    private readonly AACorePlatformFacade _core;
+    private readonly IScanProgress _progress;
+    private readonly ILogger<AACrawlTaskCorePlatformFacade> _logger;
 
     private readonly ConcurrentQueue<ApiChildCrawlTask> _crawlTaskQueue = new();
     private readonly ConcurrentDictionary<Guid, int> _processedItems = new();
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
     private int _reportedItemsCount;
     private long _lastUpdateTimestamp = Stopwatch.GetTimestamp();
+    // CAS guard: 0 = idle, 1 = updating. Prevents two concurrent callers from both
+    // passing the throttle check and issuing duplicate progress updates.
+    private int _updateGuard;
 
     private CrawlTaskConfiguration.SourcePayload? _sourcePayload;
     private List<CrawlTaskConfiguration.ConnectorConfigPayload>? _connectorConfigs;
 
     public AACrawlTaskCorePlatformFacade(
-        ILogger<AACrawlTaskCorePlatformFacade> logger,
-        IHttpClientFactory httpClientFactory,
-        FunctionContext functionContext)
-        : base(logger, httpClientFactory, functionContext)
+        AACorePlatformFacade core,
+        IScanProgress progress,
+        ILogger<AACrawlTaskCorePlatformFacade> logger)
     {
+        ArgumentNullException.ThrowIfNull(core);
+        ArgumentNullException.ThrowIfNull(progress);
+        ArgumentNullException.ThrowIfNull(logger);
+        _core = core;
+        _progress = progress;
+        _logger = logger;
     }
+
+    // ── ICorePlatformFacade — delegate to _core ───────────────────────────────
+
+    public Task<TData> DecryptData<TData>(byte[] encryptedKey, byte[] encryptedPayload)
+        => _core.DecryptData<TData>(encryptedKey, encryptedPayload);
+
+    public Task<TData> DecryptTenancyData<TData>(byte[] encryptedKey, byte[] encryptedPayload)
+        => _core.DecryptTenancyData<TData>(encryptedKey, encryptedPayload);
+
+    public Task<TMessage> DecryptServiceBusMessage<TMessage>(string message)
+        => _core.DecryptServiceBusMessage<TMessage>(message);
+
+    public Task UploadSiTSchemaRecords(CrawlContext context, string tableName, IReadOnlyList<JsonObject> entities, bool isFinal, int chunkId = 1)
+        => _core.UploadSiTSchemaRecords(context, tableName, entities, isFinal, chunkId);
+
+    public Task UploadSiTRecords(CrawlContext context, List<SitObjectImportModel> objectModels, List<SitMappingImportModel> mappingModels, List<SitImportActionModel> actionModels, bool isFinal, int chunkId = 1)
+        => _core.UploadSiTRecords(context, objectModels, mappingModels, actionModels, isFinal, chunkId);
+
+    public Task UploadActivityRecords(List<ActivityRecord> activityRecords)
+        => _core.UploadActivityRecords(activityRecords);
+
+    // ── ICrawlTaskManagementPlatformFacade ────────────────────────────────────
 
     /// <summary>
     /// Exposes the queue of child crawl tasks enqueued during <see cref="FinaliseTask"/>.
@@ -80,13 +117,19 @@ public class AACrawlTaskCorePlatformFacade : AACorePlatformFacade, ICrawlTaskMan
             return;
         }
 
+        // CAS guard: if another caller already claimed the update slot, skip.
+        if (Interlocked.CompareExchange(ref _updateGuard, 1, 0) != 0)
+        {
+            return;
+        }
+
         try
         {
-            using var activity = FunctionContext.StartActivity("update-execution-progress");
+            using var activity = _progress.StartActivity("update-execution-progress");
             var totalItems = _processedItems.Values.Sum();
             var delta = totalItems - _reportedItemsCount;
-            await FunctionContext.UpdateExecutionAsync(
-                status: "running",
+            await _progress.UpdateExecutionAsync(
+                status: ScanStatus.Running,
                 incrementCompletedObjects: delta);
             _reportedItemsCount = totalItems;
             _lastUpdateTimestamp = Stopwatch.GetTimestamp();
@@ -95,12 +138,19 @@ public class AACrawlTaskCorePlatformFacade : AACorePlatformFacade, ICrawlTaskMan
         {
             _logger.LogWarning(ex, "Unable to perform regular task update for task {TaskReference}", taskReference);
         }
+        finally
+        {
+            Interlocked.Exchange(ref _updateGuard, 0);
+        }
     }
 
     public Task FinaliseTask(APICrawlTaskProgress taskProgress)
     {
         if (taskProgress.ChildTasks is null)
         {
+            _logger.LogDebug(
+                "FinaliseTask: no child tasks for {CrawlTaskReference} — nothing to enqueue",
+                taskProgress.CrawlTaskReference);
             return Task.CompletedTask;
         }
 
@@ -119,24 +169,32 @@ public class AACrawlTaskCorePlatformFacade : AACorePlatformFacade, ICrawlTaskMan
             _crawlTaskQueue.Enqueue(childTask);
         }
 
+        // Remove the finalized task's entries to prevent unbounded memory growth
+        // on long-running connectors with many child tasks.
+        _processedItems.TryRemove(taskProgress.CrawlTaskReference, out _);
+        _processedErrors.TryRemove(taskProgress.CrawlTaskReference, out _);
+
         return Task.CompletedTask;
     }
 
     public async Task FinalizeScan()
     {
+        using var activity = _progress.StartActivity("finalize-scan");
+        var totalItems = _processedItems.Values.Sum();
+        var delta = totalItems - _reportedItemsCount;
         try
         {
-            using var activity = FunctionContext.StartActivity("finalize-scan");
-            var totalItems = _processedItems.Values.Sum();
-            var delta = totalItems - _reportedItemsCount;
-            await FunctionContext.UpdateExecutionAsync(
-                status: "completed",
+            await _progress.UpdateExecutionAsync(
+                status: ScanStatus.Completed,
                 incrementCompletedObjects: delta);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Unable to finalize scan status {ScanExecutionId}",
-                FunctionContext.ScanExecutionId);
+                _progress.Execution.ScanExecutionId);
+            // Rethrow so the job runner can set execution status to Failed
+            // rather than silently completing with an unknown status.
+            throw;
         }
     }
 }

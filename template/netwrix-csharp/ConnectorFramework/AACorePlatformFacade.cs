@@ -1,27 +1,27 @@
 using System.Text;
 using System.Text.Json;
-using Netwrix.ConnectorFramework;
+using System.Text.Json.Nodes;
 using Netwrix.Overlord.Sdk.Cloud;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
 using Netwrix.Overlord.Sdk.Core.State.Models;
 
-namespace Netwrix.Connector;
+namespace Netwrix.ConnectorFramework;
 
-public class AACorePlatformFacade : ICorePlatformFacade
+public sealed class AACorePlatformFacade : ICorePlatformFacade
 {
-    protected readonly ILogger _logger;
-    protected readonly IHttpClientFactory _httpClientFactory;
-    protected readonly FunctionContext FunctionContext;
+    private const string ObjectsTable = "objects";
+    private const string ActivityRecordsTable = "activity_records";
 
-    public AACorePlatformFacade(
-        ILogger<AACorePlatformFacade> logger,
-        IHttpClientFactory httpClientFactory,
-        FunctionContext functionContext)
+    private readonly ILogger<AACorePlatformFacade> _logger;
+    private readonly IScanWriter _writer;
+
+    public AACorePlatformFacade(ILogger<AACorePlatformFacade> logger, IScanWriter writer)
     {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(writer);
         _logger = logger;
-        _httpClientFactory = httpClientFactory;
-        FunctionContext = functionContext;
+        _writer = writer;
     }
 
     /// <summary>
@@ -33,6 +33,20 @@ public class AACorePlatformFacade : ICorePlatformFacade
         var payloadObject = JsonSerializer.Deserialize<TData>(payloadString);
         return Task.FromResult(payloadObject
             ?? throw new InvalidOperationException("Unable to deserialize data payload."));
+    }
+
+    public async Task UploadSiTSchemaRecords(CrawlContext context, string tableName, IReadOnlyList<JsonObject> entities, bool isFinal,
+        int chunkId = 1)
+    {
+        foreach (var entity in entities)
+        {
+            _writer.SaveObject(tableName, entity);
+        }
+
+        if (isFinal)
+        {
+            await _writer.FlushTablesAsync(CancellationToken.None);
+        }
     }
 
     /// <summary>
@@ -53,17 +67,16 @@ public class AACorePlatformFacade : ICorePlatformFacade
 
     public Task UploadActivityRecords(List<ActivityRecord> activityRecords)
     {
-        // Activity upload not implemented for Access Analyzer connector.
-        // TODO T2: Implement or document as intentionally unsupported with NotSupportedException.
+        foreach (var record in activityRecords)
+        {
+            _writer.SaveObject(ActivityRecordsTable, record);
+        }
+
         return Task.CompletedTask;
     }
 
     /// <summary>
     /// Uploads SiT (State in Time) records to the core platform.
-    ///
-    /// NOTE: The object-type label map (Guid to type name) is connector-specific and must be
-    /// added by the connector developer in their own project — do not add it to the template.
-    /// See TODO T10.
     /// </summary>
     public async Task UploadSiTRecords(
         CrawlContext context,
@@ -73,24 +86,7 @@ public class AACorePlatformFacade : ICorePlatformFacade
         bool isFinal,
         int chunkId = 1)
     {
-        using var activity = FunctionContext.StartActivity("upload-sit-records");
-
-        foreach (var obj in objectModels)
-        {
-            _logger.LogInformation("Object {Type} {Count} properties",
-                obj.Type, obj.Properties?.Count ?? 0);
-            FunctionContext.GetTable("objects").AddObject(obj);
-        }
-
-        // TODO T1: Implement mapping model upload — FunctionContext.GetTable("mapping").AddObject(m)
-        // TODO T1: Implement action model upload  — FunctionContext.GetTable("action").AddObject(a)
-
-        if (isFinal)
-        {
-            _logger.LogInformation("Final upload — flushing all pending batches");
-            // CancellationToken.None is intentional: a final flush must not be abandoned even
-            // if the scan has been cancelled — data already buffered must reach the ingestion service.
-            await FunctionContext.FlushTablesAsync(CancellationToken.None);
-        }
+        throw new NotSupportedException(
+            "Upload of graph based State in Time Records is not supported in Access Analyzer connectors.");
     }
 }
