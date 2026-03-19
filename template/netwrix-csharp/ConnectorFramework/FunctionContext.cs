@@ -8,7 +8,7 @@ namespace Netwrix.ConnectorFramework;
 /// Per-request context provided to every connector operation.
 /// Injected by the framework via DI (Scoped lifetime).
 /// </summary>
-public sealed class FunctionContext : IAsyncDisposable
+public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposable
 {
     private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
 
@@ -18,10 +18,11 @@ public sealed class FunctionContext : IAsyncDisposable
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BatchManager> _tables = new();
     private readonly ILoggerFactory _loggerFactory;
     private readonly IStateStorage _stateStorage;
+    private readonly IDisposable? _logScope;
+    private bool _flushed;
 
     public ConnectorRequestData Request { get; }
-    public string? ScanId => Request.ScanId;
-    public string? ScanExecutionId => Request.ScanExecutionId;
+    public ExecutionContext Execution => Request.Execution;
 
     /// <summary>Structured logger with automatic scan-context enrichment.</summary>
     public ILogger Log => _logger;
@@ -43,6 +44,14 @@ public sealed class FunctionContext : IAsyncDisposable
         _logger = logger;
         _loggerFactory = loggerFactory;
         _stateStorage = stateStorage;
+        _logScope = _logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["scan_id"] = request.Execution.ScanId,
+            ["scan_execution_id"] = request.Execution.ScanExecutionId,
+            ["function_type"] = request.Execution.FunctionType,
+            ["source_type"] = request.Execution.SourceType,
+            ["source_id"] = request.Execution.SourceId,
+        });
     }
 
     // ── Secrets ───────────────────────────────────────────────────────────────
@@ -136,6 +145,7 @@ public sealed class FunctionContext : IAsyncDisposable
     /// </summary>
     public async Task FlushTablesAsync(CancellationToken ct = default)
     {
+        _flushed = true;
         foreach (var (_, bm) in _tables)
         {
             await bm.FlushAsync(ct);
@@ -160,18 +170,17 @@ public sealed class FunctionContext : IAsyncDisposable
     {
         var headers = new Dictionary<string, string>();
 
-        if (ScanId is not null)
+        if (Execution.ScanId is not null)
         {
-            headers["Scan-Id"] = ScanId;
+            headers["Scan-Id"] = Execution.ScanId;
         }
 
-        if (ScanExecutionId is not null)
+        if (Execution.ScanExecutionId is not null)
         {
-            headers["Scan-Execution-Id"] = ScanExecutionId;
+            headers["Scan-Execution-Id"] = Execution.ScanExecutionId;
         }
 
-        var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
-        headers["Function-Type"] = functionType;
+        headers["Function-Type"] = Execution.FunctionType ?? "netwrix";
 
         var current = Activity.Current;
         if (current is not null)
@@ -204,13 +213,13 @@ public sealed class FunctionContext : IAsyncDisposable
         int incrementCompletedObjects = 0,
         CancellationToken ct = default)
     {
-        if (ScanExecutionId is null)
+        if (Execution.ScanExecutionId is null)
         {
             _logger.LogWarning("UpdateExecutionAsync called but ScanExecutionId is null — skipping");
             return;
         }
 
-        var payload = new Dictionary<string, object> { ["executionId"] = ScanExecutionId };
+        var payload = new Dictionary<string, object> { ["executionId"] = Execution.ScanExecutionId };
         if (status is not null)
         {
             payload["status"] = status;
@@ -258,7 +267,7 @@ public sealed class FunctionContext : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "UpdateExecution failed for execution {ExecutionId}", ScanExecutionId);
+            _logger.LogError(ex, "UpdateExecution failed for execution {ExecutionId}", Execution.ScanExecutionId);
         }
     }
 
@@ -270,7 +279,7 @@ public sealed class FunctionContext : IAsyncDisposable
     /// </summary>
     public async Task<Dictionary<string, string>?> GetConnectorStateAsync(CancellationToken ct = default)
     {
-        if (ScanId is null)
+        if (Execution.ScanId is null)
         {
             _logger.LogWarning("GetConnectorStateAsync called but ScanId is null — skipping");
             return null;
@@ -289,9 +298,13 @@ public sealed class FunctionContext : IAsyncDisposable
             }
             return result;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "GetConnectorState failed for scan {ScanId}", ScanId);
+            _logger.LogError(ex, "GetConnectorState failed for scan {ScanId}", Execution.ScanId);
             return null;
         }
     }
@@ -301,7 +314,7 @@ public sealed class FunctionContext : IAsyncDisposable
     /// </summary>
     public async Task SetConnectorStateAsync(Dictionary<string, object?> data, CancellationToken ct = default)
     {
-        if (ScanId is null)
+        if (Execution.ScanId is null)
         {
             _logger.LogWarning("SetConnectorStateAsync called but ScanId is null — skipping");
             return;
@@ -319,7 +332,7 @@ public sealed class FunctionContext : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "SetConnectorState failed for scan {ScanId}", ScanId);
+            _logger.LogError(ex, "SetConnectorState failed for scan {ScanId}", Execution.ScanId);
         }
     }
 
@@ -329,7 +342,7 @@ public sealed class FunctionContext : IAsyncDisposable
     /// </summary>
     public async Task DeleteConnectorStateAsync(string[]? names = null, CancellationToken ct = default)
     {
-        if (ScanId is null)
+        if (Execution.ScanId is null)
         {
             _logger.LogWarning("DeleteConnectorStateAsync called but ScanId is null — skipping");
             return;
@@ -351,7 +364,7 @@ public sealed class FunctionContext : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "DeleteConnectorState failed for scan {ScanId}", ScanId);
+            _logger.LogError(ex, "DeleteConnectorState failed for scan {ScanId}", Execution.ScanId);
         }
     }
 
@@ -366,8 +379,17 @@ public sealed class FunctionContext : IAsyncDisposable
             return null;
         }
 
+        // Guard: scanExecutionId originates from HTTP headers / env vars (attacker-controlled).
+        // Validate it is a well-formed GUID before interpolating into the query string.
+        if (!Guid.TryParse(scanExecutionId, out var parsedId))
+        {
+            _logger.LogWarning(
+                "GetPriorExecutionAsync: scanExecutionId is not a valid GUID format — skipping query");
+            return null;
+        }
+
         var serviceUrl = ServiceUrlHelper.Resolve("APP_DATA_QUERY_FUNCTION", "app-data-query");
-        var query = $"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{scanExecutionId}' LIMIT 1";
+        var query = $"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{parsedId}' LIMIT 1";
         var payload = new { query };
 
         try
@@ -445,15 +467,17 @@ public sealed class FunctionContext : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _logScope?.Dispose();
         foreach (var (_, bm) in _tables)
         {
-            await bm.FlushAsync();
+            // Skip flush if FlushTablesAsync() was already called (e.g. by the job runner).
+            // Flushing again would post duplicate batches to the data-ingestion service.
+            if (!_flushed)
+            {
+                await bm.FlushAsync();
+            }
+
             await bm.DisposeAsync();
         }
     }
 }
-
-/// <summary>
-/// Represents a prior scan execution returned from the app-data-query service.
-/// </summary>
-public sealed record PriorExecution(string Id, string Status, int CompletedObjects);

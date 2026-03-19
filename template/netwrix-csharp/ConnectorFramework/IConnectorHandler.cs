@@ -9,8 +9,9 @@ public interface IConnectorHandler
     /// <summary>
     /// Optional: register connector-specific services into DI.
     /// Called before the host is built so the connector can add its own dependencies.
+    /// Use <paramref name="configuration"/> to bind typed options or call SDK extension methods.
     /// </summary>
-    void MapServices(IServiceCollection services) { }
+    void MapServices(IServiceCollection services, IConfiguration configuration) { }
 
     /// <summary>
     /// Optional (HTTP mode): map the connector's routes onto the ASP.NET Core application.

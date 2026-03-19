@@ -33,7 +33,7 @@ public sealed class ConnectorStateStorage : IStateStorage
         _logger = logger;
     }
 
-    private string? ScanId => _request.ScanId;
+    private string? ScanId => _request.Execution.ScanId;
 
     // ── IStateStorage ────────────────────────────────────────────────────────
 
@@ -416,14 +416,14 @@ public sealed class ConnectorStateStorage : IStateStorage
     {
         var headers = new Dictionary<string, string>();
 
-        if (_request.ScanId is not null)
+        if (_request.Execution.ScanId is not null)
         {
-            headers["Scan-Id"] = _request.ScanId;
+            headers["Scan-Id"] = _request.Execution.ScanId;
         }
 
-        if (_request.ScanExecutionId is not null)
+        if (_request.Execution.ScanExecutionId is not null)
         {
-            headers["Scan-Execution-Id"] = _request.ScanExecutionId;
+            headers["Scan-Execution-Id"] = _request.Execution.ScanExecutionId;
         }
 
         headers["Function-Type"] = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";

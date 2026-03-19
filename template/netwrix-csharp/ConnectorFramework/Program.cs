@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Netwrix.Overlord.Sdk.Core.Storage;
+using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -40,9 +41,15 @@ internal static class Program
         builder.Services.AddSingleton(typeof(IConnectorHandler), handlerType);
         // Bootstrap instance (parameterless) used only to register connector services before container build.
         // The DI-resolved singleton is used for all request handling.
-        ((IConnectorHandler)Activator.CreateInstance(handlerType)!).MapServices(builder.Services);
+        ((IConnectorHandler)Activator.CreateInstance(handlerType)!).MapServices(builder.Services, builder.Configuration);
 
-        var port = int.Parse(Environment.GetEnvironmentVariable("PORT") ?? "5000", System.Globalization.CultureInfo.InvariantCulture);
+        var portStr = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+        if (!int.TryParse(portStr, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var port))
+        {
+            throw new InvalidOperationException(
+                $"PORT environment variable '{portStr}' is not a valid port number.");
+        }
         builder.WebHost.UseUrls($"http://+:{port}");
 
         var app = builder.Build();
@@ -97,16 +104,16 @@ internal static class Program
     {
         var handlerType = DiscoverHandlerType();
 
-        var host = Host.CreateDefaultBuilder(args)
+        using var host = Host.CreateDefaultBuilder(args)
             .ConfigureLogging(ConfigureLogging)
-            .ConfigureServices((_, services) =>
+            .ConfigureServices((ctx, services) =>
             {
                 RegisterOpenTelemetry(services, null, isHttpMode: false);
                 RegisterFrameworkServices(services, isHttpMode: false);
 
                 services.AddSingleton(typeof(IConnectorHandler), handlerType);
                 // Bootstrap instance (parameterless) used only to register connector services before container build.
-                ((IConnectorHandler)Activator.CreateInstance(handlerType)!).MapServices(services);
+                ((IConnectorHandler)Activator.CreateInstance(handlerType)!).MapServices(services, ctx.Configuration);
             })
             .Build();
 
@@ -115,6 +122,8 @@ internal static class Program
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Netwrix.ConnectorFramework.Program");
         int exitCode;
         Activity? jobActivity = null;
+        FunctionContext? context = null;
+        var isLongRunning = false;
         try
         {
             await using var scope = host.Services.CreateAsyncScope();
@@ -125,33 +134,55 @@ internal static class Program
             // Make the job-mode request data available to scoped services
             scope.ServiceProvider.GetRequiredService<RequestDataHolder>().Data = requestData;
 
-            var context = scope.ServiceProvider.GetRequiredService<FunctionContext>();
+            context = scope.ServiceProvider.GetRequiredService<FunctionContext>();
             var handlerInstance = scope.ServiceProvider.GetRequiredService<IConnectorHandler>();
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
-            logger.LogInformation(
-                "Starting job execution executionMode=job functionType={FunctionType} scanId={ScanId} scanExecutionId={ScanExecutionId}",
-                Environment.GetEnvironmentVariable("FUNCTION_TYPE"),
-                requestData.ScanId,
-                requestData.ScanExecutionId);
+            isLongRunning = requestData.Execution.IsLongRunning;
 
-            object result;
-            using (var handleActivity = ActivitySource.StartActivity("handle_request"))
+            using (logger.BeginScope(new Dictionary<string, object?>
             {
-                result = await handlerInstance.HandleJobAsync(requestData, context, lifetime.ApplicationStopping);
+                ["scan_id"] = requestData.Execution.ScanId,
+                ["scan_execution_id"] = requestData.Execution.ScanExecutionId,
+                ["function_type"] = requestData.Execution.FunctionType,
+                ["source_type"] = requestData.Execution.SourceType,
+                ["source_id"] = requestData.Execution.SourceId,
+            }))
+            {
+                logger.LogInformation(
+                    "Starting job execution executionMode=job functionType={FunctionType} scanId={ScanId} scanExecutionId={ScanExecutionId}",
+                    requestData.Execution.FunctionType,
+                    requestData.Execution.ScanId,
+                    requestData.Execution.ScanExecutionId);
+
+                if (isLongRunning)
+                {
+                    await context.UpdateExecutionAsync(status: ScanStatus.Running);
+                }
+
+                object result;
+                using (var handleActivity = ActivitySource.StartActivity("handle_request"))
+                {
+                    result = await handlerInstance.HandleJobAsync(requestData, context, lifetime.ApplicationStopping);
+                }
+                await context.FlushTablesAsync();
+
+                jobActivity?.SetStatus(ActivityStatusCode.Ok);
+
+                Console.WriteLine(JsonSerializer.Serialize(result));
+                exitCode = 0;
             }
-            await context.FlushTablesAsync();
-
-            jobActivity?.SetStatus(ActivityStatusCode.Ok);
-
-            Console.WriteLine(JsonSerializer.Serialize(result));
-            exitCode = 0;
         }
         catch (Exception ex)
         {
             jobActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             jobActivity?.RecordException(ex);
             logger.LogError(ex, "Job failed");
+            if (isLongRunning && context is not null)
+            {
+                await context.UpdateExecutionAsync(status: ScanStatus.Failed, completedAt: DateTimeOffset.UtcNow);
+            }
+
             exitCode = 1;
         }
         finally
@@ -159,7 +190,8 @@ internal static class Program
             jobActivity?.Dispose();
         }
 
-        await host.StopAsync(); // flushes OTEL BatchSpanProcessor
+        await host.StopAsync();
+        // host.Dispose() called here by using — triggers OpenTelemetryLoggerProvider.Dispose() → ForceFlush()
         return exitCode;
     }
 
@@ -235,10 +267,15 @@ internal static class Program
                     .Where(h => h.Value.Count > 0)
                     .ToDictionary(h => h.Key, h => h.Value.FirstOrDefault() ?? "", StringComparer.OrdinalIgnoreCase),
                 Body: body,
-                ScanId: http.Request.Headers["Scan-Id"].FirstOrDefault()
-                         ?? Environment.GetEnvironmentVariable("SCAN_ID"),
-                ScanExecutionId: http.Request.Headers["Scan-Execution-Id"].FirstOrDefault()
-                                  ?? Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID"));
+                Execution: new ExecutionContext(
+                    ScanId: http.Request.Headers["Scan-Id"].FirstOrDefault()
+                                      ?? Environment.GetEnvironmentVariable("SCAN_ID"),
+                    ScanExecutionId: http.Request.Headers["Scan-Execution-Id"].FirstOrDefault()
+                                      ?? Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID"),
+                    SourceId: Environment.GetEnvironmentVariable("SOURCE_ID"),
+                    SourceType: Environment.GetEnvironmentVariable("SOURCE_TYPE"),
+                    SourceVersion: Environment.GetEnvironmentVariable("SOURCE_VERSION"),
+                    FunctionType: Environment.GetEnvironmentVariable("FUNCTION_TYPE")));
         });
     }
 
@@ -256,6 +293,9 @@ internal static class Program
         var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
         var serviceName = $"{sourceType}-{functionType}";
         var environment = Environment.GetEnvironmentVariable("ENVIRONMENT") ?? "development";
+        // Default matches the Python template (index.py:118) and the in-cluster collector address.
+        // Connector authors running outside this cluster should set OTEL_EXPORTER_OTLP_ENDPOINT
+        // explicitly; leaving it unset will silently fail to export rather than error.
         var otelEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
                            ?? "http://otel-collector.access-analyzer.svc.cluster.local:4318";
 
@@ -279,7 +319,11 @@ internal static class Program
                     tracing.AddAspNetCoreInstrumentation();
                 }
 
-                tracing.AddOtlpExporter(o => o.Endpoint = new Uri($"{otelEndpoint}/v1/traces"));
+                tracing.AddOtlpExporter(o =>
+                {
+                    o.Endpoint = new Uri($"{otelEndpoint}/v1/traces");
+                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                });
             })
             .WithMetrics(metrics =>
             {
@@ -291,18 +335,33 @@ internal static class Program
                     metrics.AddAspNetCoreInstrumentation();
                 }
 
-                metrics.AddOtlpExporter(o => o.Endpoint = new Uri($"{otelEndpoint}/v1/metrics"));
+                metrics.AddOtlpExporter(o =>
+                {
+                    o.Endpoint = new Uri($"{otelEndpoint}/v1/metrics");
+                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                });
             })
-            .WithLogging(logging =>
-            {
-                logging.SetResourceBuilder(resourceBuilder)
-                    .AddOtlpExporter(o => o.Endpoint = new Uri($"{otelEndpoint}/v1/logs"));
-            });
+            .WithLogging(
+                logging =>
+                {
+                    logging.SetResourceBuilder(resourceBuilder)
+                        .AddOtlpExporter(o =>
+                        {
+                            o.Endpoint = new Uri($"{otelEndpoint}/v1/logs");
+                            o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                        });
+                },
+                options =>
+                {
+                    options.IncludeFormattedMessage = true;  // populate Body in ClickHouse
+                    options.IncludeScopes = true;            // capture BeginScope() values as attributes
+                    options.ParseStateValues = true;         // capture {ScanId} etc. as structured attributes
+                });
     }
 
     // ── Handler discovery ─────────────────────────────────────────────────────
 
-    private static Type DiscoverHandlerType()
+    internal static Type DiscoverHandlerType()
     {
         // The function assembly sits in the same directory as ConnectorFramework.dll.
         // It is the single assembly (other than ConnectorFramework itself) that references this assembly.
@@ -315,7 +374,12 @@ internal static class Program
             .Select(f =>
             {
                 try { return Assembly.LoadFrom(f); }
-                catch { return null; }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        $"[ConnectorFramework] Warning: failed to load assembly '{f}': {ex.Message}");
+                    return null;
+                }
             })
             .Where(a => a is not null)
             .Cast<Assembly>()
@@ -324,7 +388,16 @@ internal static class Program
             .ToList();
 
         var handlerTypes = candidateAssemblies
-            .SelectMany(a => { try { return a.GetTypes(); } catch { return []; } })
+            .SelectMany(a =>
+            {
+                try { return a.GetTypes(); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        $"[ConnectorFramework] Warning: failed to enumerate types in '{a.FullName}': {ex.Message}");
+                    return [];
+                }
+            })
             .Where(t => !t.IsAbstract && !t.IsInterface && typeof(IConnectorHandler).IsAssignableFrom(t))
             .ToList();
 
@@ -383,7 +456,12 @@ internal static class Program
             Path: BuildRequestPath(),
             Headers: new Dictionary<string, string>(),
             Body: body,
-            ScanId: Environment.GetEnvironmentVariable("SCAN_ID"),
-            ScanExecutionId: Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID"));
+            Execution: new ExecutionContext(
+                ScanId: Environment.GetEnvironmentVariable("SCAN_ID"),
+                ScanExecutionId: Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID"),
+                SourceId: Environment.GetEnvironmentVariable("SOURCE_ID"),
+                SourceType: Environment.GetEnvironmentVariable("SOURCE_TYPE"),
+                SourceVersion: Environment.GetEnvironmentVariable("SOURCE_VERSION"),
+                FunctionType: Environment.GetEnvironmentVariable("FUNCTION_TYPE")));
     }
 }
