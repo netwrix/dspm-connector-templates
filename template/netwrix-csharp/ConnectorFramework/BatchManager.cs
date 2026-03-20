@@ -141,15 +141,12 @@ public sealed class BatchManager : IAsyncDisposable
         return (result, _pendingObjectCount);
     }
 
-    private byte[] BuildEnhancedObject(object obj)
+    private static byte[] BuildEnhancedObject(object obj)
     {
         using var ms = new MemoryStream();
         using var writer = new Utf8JsonWriter(ms);
 
         writer.WriteStartObject();
-        writer.WriteString("scan_id", _requestData.Execution.ScanId ?? "");
-        writer.WriteString("scan_execution_id", _requestData.Execution.ScanExecutionId ?? "");
-        writer.WriteString("scanned_at", DateTimeOffset.UtcNow.ToString("O"));
 
         // Copy the connector object's properties after the injected framework fields
         using var doc = JsonSerializer.SerializeToDocument(obj);

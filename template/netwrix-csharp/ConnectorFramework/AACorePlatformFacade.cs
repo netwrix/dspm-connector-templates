@@ -10,7 +10,6 @@ namespace Netwrix.ConnectorFramework;
 
 public sealed class AACorePlatformFacade : ICorePlatformFacade
 {
-    private const string ObjectsTable = "objects";
     private const string ActivityRecordsTable = "activity_records";
 
     private readonly ILogger<AACorePlatformFacade> _logger;
