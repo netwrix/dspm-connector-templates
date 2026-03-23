@@ -103,9 +103,7 @@ class DataQueryClient:
         )
 
         if response.status_code != 200:
-            raise DataQueryError(
-                f"data-query returned HTTP {response.status_code}: {response.text[:500]}"
-            )
+            raise DataQueryError(f"data-query returned HTTP {response.status_code}: {response.text[:500]}")
 
         result = response.json()
         if not result.get("success"):
@@ -146,9 +144,7 @@ class DataQueryClient:
             return int(next(iter(first_row.values())))
         return 0
 
-    def paginate(
-        self, sql: str, page_size: int = 1000
-    ) -> Generator[list[dict[str, Any]]]:
+    def paginate(self, sql: str, page_size: int = 1000) -> Generator[list[dict[str, Any]]]:
         """
         Yield pages of results for a query, automatically handling LIMIT/OFFSET.
 
@@ -159,12 +155,16 @@ class DataQueryClient:
         Yields:
             Lists of dicts, one list per page, until an empty page is returned.
         """
-        base_sql = re.sub(
-            r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?",
-            "",
-            sql,
-            flags=re.IGNORECASE,
-        ).strip().rstrip(";")
+        base_sql = (
+            re.sub(
+                r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?",
+                "",
+                sql,
+                flags=re.IGNORECASE,
+            )
+            .strip()
+            .rstrip(";")
+        )
 
         offset = 0
         while True:
@@ -177,9 +177,7 @@ class DataQueryClient:
                 break
             offset += page_size
 
-    def paginate_consuming(
-        self, sql: str, page_size: int = 1000
-    ) -> Generator[list[dict[str, Any]]]:
+    def paginate_consuming(self, sql: str, page_size: int = 1000) -> Generator[list[dict[str, Any]]]:
         """
         Yield pages by repeatedly executing the same query with only a LIMIT.
 
@@ -195,12 +193,16 @@ class DataQueryClient:
         Yields:
             Lists of dicts, one list per page, until an empty page is returned.
         """
-        base_sql = re.sub(
-            r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?",
-            "",
-            sql,
-            flags=re.IGNORECASE,
-        ).strip().rstrip(";")
+        base_sql = (
+            re.sub(
+                r"\bLIMIT\s+\d+(\s+OFFSET\s+\d+)?",
+                "",
+                sql,
+                flags=re.IGNORECASE,
+            )
+            .strip()
+            .rstrip(";")
+        )
         page_sql = f"{base_sql} LIMIT {page_size}"
 
         stall_count = 0
@@ -238,4 +240,4 @@ class DataQueryClient:
         from_match = re.search(r"\bFROM\b", sql, re.IGNORECASE)
         if not from_match:
             raise DataQueryError("Cannot build count query: no FROM clause found")
-        return f"SELECT count(*) {sql[from_match.start():]}"
+        return f"SELECT count(*) {sql[from_match.start() :]}"
