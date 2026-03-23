@@ -68,6 +68,8 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
 COPY --chown=app:app ./template/netwrix-python/function/ .
 COPY --chown=app:app ./template/netwrix-python/redis_signal_handler.py    .
 COPY --chown=app:app ./template/netwrix-python/state_manager.py           .
+COPY --chown=app:app ./template/netwrix-python/data_query.py              .
+COPY --chown=app:app ./template/netwrix-python/implicit_deleter.py        .
 
 # Copy function-specific code (handler, requirements, etc) - this overrides template defaults if present
 COPY --chown=app:app ${FUNCTION_DIR}/ .
