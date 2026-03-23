@@ -10,7 +10,7 @@ namespace Netwrix.ConnectorFramework;
 
 public sealed class AACorePlatformFacade : ICorePlatformFacade
 {
-    private const string ActivityRecordsTable = "activity_records";
+    // private const string ActivityRecordsTable = "activity_records";
 
     private readonly ILogger<AACorePlatformFacade> _logger;
     private readonly IScanWriter _writer;
@@ -66,10 +66,11 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade
 
     public Task UploadActivityRecords(List<ActivityRecord> activityRecords)
     {
-        foreach (var record in activityRecords)
-        {
-            _writer.SaveObject(ActivityRecordsTable, record);
-        }
+        // TODO: re-enable once we have the activity record schema in clickhouse.
+        // foreach (var record in activityRecords)
+        // {
+        //     _writer.SaveObject(ActivityRecordsTable, record);
+        // }
 
         return Task.CompletedTask;
     }
