@@ -56,8 +56,9 @@ class ImplicitDeleter:
         scan_execution_id: str,
     ) -> None:
         # --- 1. Validate table engine and required columns -------------------
-        safe_table_name = full_table_name.replace("'", "''")
         safe_database = self._database.replace("'", "''")
+        safe_table_name = full_table_name.replace("'", "''")
+        quoted_table = f"`{full_table_name.replace('`', '``')}`"
         meta_sql = (
             f"SELECT t.engine as engine, c.name as name, c.type as type, "
             f"c.is_in_sorting_key as is_in_sorting_key, c.is_in_partition_key as is_in_partition_key "
@@ -118,11 +119,11 @@ class ImplicitDeleter:
         self._context.flush_tables()
 
         # --- 2. Query stale rows and re-insert with hard_delete=1 -----------
-        key_cols_str = ", ".join(f"`{col}`" if "'" in col else col for col in key_columns)
+        key_cols_str = ", ".join(f"`{col.replace('`', '``')}`" for col in key_columns)
         safe_scan_id = scan_id.replace("'", "''")
         safe_exec_id = scan_execution_id.replace("'", "''")
         select_sql = (
-            f"SELECT {key_cols_str} FROM {safe_table_name} FINAL "
+            f"SELECT {key_cols_str} FROM {quoted_table} FINAL "
             f"WHERE scan_id = '{safe_scan_id}' AND scan_execution_id != '{safe_exec_id}'"
         )
 
