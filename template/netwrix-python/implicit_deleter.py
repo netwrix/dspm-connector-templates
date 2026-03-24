@@ -56,12 +56,14 @@ class ImplicitDeleter:
         scan_execution_id: str,
     ) -> None:
         # --- 1. Validate table engine and required columns -------------------
+        safe_table_name = full_table_name.replace("'", "''")
+        safe_database = self._database.replace("'", "''")
         meta_sql = (
             f"SELECT t.engine as engine, c.name as name, c.type as type, "
             f"c.is_in_sorting_key as is_in_sorting_key, c.is_in_partition_key as is_in_partition_key "
             f"FROM system.tables AS t "
             f"JOIN system.columns AS c ON t.database = c.database AND t.name = c.table "
-            f"WHERE t.database = '{self._database}' AND t.name = '{full_table_name}'"
+            f"WHERE t.database = '{safe_database}' AND t.name = '{safe_table_name}'"
         )
         self._context.log.info("Querying table metadata", table=full_table_name, query=meta_sql)
         meta_rows = self._db.query(meta_sql)
@@ -116,11 +118,11 @@ class ImplicitDeleter:
         self._context.flush_tables()
 
         # --- 2. Query stale rows and re-insert with hard_delete=1 -----------
-        key_cols_str = ", ".join(key_columns)
+        key_cols_str = ", ".join(f"`{col}`" if "'" in col else col for col in key_columns)
         safe_scan_id = scan_id.replace("'", "''")
         safe_exec_id = scan_execution_id.replace("'", "''")
         select_sql = (
-            f"SELECT {key_cols_str} FROM {full_table_name} FINAL "
+            f"SELECT {key_cols_str} FROM {safe_table_name} FINAL "
             f"WHERE scan_id = '{safe_scan_id}' AND scan_execution_id != '{safe_exec_id}'"
         )
 
