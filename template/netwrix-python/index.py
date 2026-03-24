@@ -348,6 +348,10 @@ class Context:
 
         self.log = ContextLogger(self)
 
+    @property
+    def source_type(self) -> str:
+        return SOURCE_TYPE
+
     def test_connection_success_response(self):
         return {"statusCode": 200, "body": {}}
 
@@ -631,12 +635,12 @@ class Context:
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
             # Log the update request details
-            self.log.info(f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}")
+            self.log.debug(f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}")
 
             # Get service URL for app-update-execution
             service_name = os.getenv("APP_UPDATE_EXECUTION_FUNCTION", "app-update-execution")
             url = get_service_url(service_name)
-            self.log.info(f"Sending update_execution to URL: {url}")
+            self.log.debug(f"Sending update_execution to URL: {url}")
 
             response = requests.post(
                 url,
@@ -646,7 +650,7 @@ class Context:
             )
 
             if response.status_code in (202, 200):
-                self.log.info(
+                self.log.debug(
                     f"update_execution succeeded: status_code={response.status_code}, response={response.text[:200] if response.text else ''}"
                 )
                 return True, None
