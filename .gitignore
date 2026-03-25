@@ -46,3 +46,4 @@ obj/
 _ReSharper*/
 TestResults/
 *.nupkg
+*.sln
