@@ -1,6 +1,15 @@
+# OS
 .DS_Store
-.idea
-.vscode
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.user
+.vs/
+
+# Environment files
 .env
 .env.local
 .env.development.local
@@ -9,4 +18,32 @@
 .env.development
 .env.test
 .env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.python-version.local
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv
+# uv.lock is intentionally committed — do not add it here
+
+# C# / .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+[Pp]ublish/
+_ReSharper*/
+TestResults/
+*.nupkg
 *.sln
