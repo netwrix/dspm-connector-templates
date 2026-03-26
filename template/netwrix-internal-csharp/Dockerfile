@@ -1,18 +1,20 @@
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
 
+ARG FUNCTION_DIR
+
 # Install CA certificates and curl for better SSL handling
 RUN apk add --no-cache ca-certificates curl
 
 WORKDIR /src
 
 # Copy local packages and config
-COPY function/packages/ ./packages/
-COPY NuGet.config .
+COPY ${FUNCTION_DIR}/packages/ ./packages/
+COPY ./template/netwrix-internal-csharp/NuGet.config .
 
 # Copy project files
-COPY Root.csproj .
-COPY function/Function.csproj function/
+COPY ./template/netwrix-internal-csharp/Root.csproj .
+COPY ${FUNCTION_DIR}/Function.csproj function/
 
 # Clear NuGet cache and configure sources with timeouts
 RUN dotnet nuget locals all --clear
@@ -26,13 +28,15 @@ ENV NUGET_XMLDOC_MODE=skip
 RUN timeout 300 dotnet restore --verbosity normal --configfile NuGet.config
 
 # Copy Program.cs from template (contains the entry point)
-COPY Program.cs .
+COPY ./template/netwrix-internal-csharp/Program.cs ./
 
 # Copy template source files to function directory (shared classes)
-COPY FunctionContext.cs FunctionRequest.cs FunctionResponse.cs ./function/
+COPY ./template/netwrix-internal-csharp/FunctionContext.cs ./function/
+COPY ./template/netwrix-internal-csharp/FunctionRequest.cs ./function/
+COPY ./template/netwrix-internal-csharp/FunctionResponse.cs ./function/
 
 # Copy all source files from function directory
-COPY function/*.cs ./function/
+COPY ${FUNCTION_DIR}/*.cs ./function/
 RUN dotnet publish -c Release -o /app/publish --no-self-contained --framework net8.0
 
 # Runtime stage

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Netwrix.Connector</RootNamespace>
+    <!-- CA2007: ConfigureAwait — not needed in ASP.NET Core host apps -->
+    <NoWarn>CA2007</NoWarn>
+    <!-- Add your connector-specific NuGet packages below this line. Do NOT edit ConnectorFramework.csproj. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ConnectorFramework\ConnectorFramework.csproj" />
+  </ItemGroup>
+
+</Project>
