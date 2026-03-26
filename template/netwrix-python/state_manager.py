@@ -1,5 +1,5 @@
 """
-State Management Framework for OpenFaaS Connectors
+State Management Framework for Connectors
 
 This module provides a framework for managing scan/sync execution states,
 including stop/pause/resume operations. Connectors can declare their
@@ -87,7 +87,7 @@ class StateManager:
         Initialize state manager
 
         Args:
-            context: OpenFaaS context object
+            context: Template context object
             supported_states: Dict of {state: bool} indicating support
             signal_check_interval: Seconds between signal checks (default 5)
         """

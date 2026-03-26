@@ -21,10 +21,8 @@ from typing import Final
 
 import orjson
 import requests
-from flask import Flask, jsonify, request
 from opentelemetry import context, metrics, trace
 from opentelemetry.trace.status import StatusCode
-from waitress import serve
 
 dictConfig(
     {
@@ -35,13 +33,13 @@ dictConfig(
             }
         },
         "handlers": {
-            "wsgi": {
+            "console": {
                 "class": "logging.StreamHandler",
-                "stream": "ext://flask.logging.wsgi_errors_stream",
+                "stream": "ext://sys.stderr",
                 "formatter": "default",
             }
         },
-        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["wsgi"]},
+        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["console"]},
     }
 )
 
@@ -54,44 +52,22 @@ SERVICE_NAME: Final = f"{SOURCE_TYPE}-{PROCESS_KEY}" if PROCESS_KEY else f"{SOUR
 # For local development, set to appropriate docker-compose service names
 COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "access-analyzer")
 
-app = Flask(SERVICE_NAME)
 
-
-def get_service_url(service_name: str, port: int = 80, use_async: bool = False) -> str:
+def get_service_url(service_name: str, port: int = 80) -> str:
     """
     Get the URL for a common function service.
 
-    Supports three deployment modes:
-    1. Local development (RUN_LOCAL=true): uses simple service name with port 8080
-    2. Kubernetes with USE_OPENFAAS_GATEWAY=false (default): uses FQDN
-       Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
-    3. OpenFaaS (USE_OPENFAAS_GATEWAY=true): uses OpenFaaS gateway
-       Format: http://<gateway>/function/<service-name> or
-               http://<gateway>/async-function/<service-name> (if use_async=True)
+    Uses Kubernetes FQDN format:
+    http://<service-name>.<namespace>.svc.cluster.local:<port>
 
     Args:
         service_name: Name of the service to call
-        port: Port number for Kubernetes FQDN (default: 80)
-        use_async: If True and using OpenFaaS, uses async-function endpoint instead of function
+        port: Port number (default: 80)
     """
-    local_run = os.getenv("RUN_LOCAL", "false") == "true"
-    use_openfaas = os.getenv("USE_OPENFAAS_GATEWAY", "false") == "true"
-
-    if local_run:
-        # Local docker-compose: service names are directly resolvable
-        return f"http://{service_name}:8080"
-
-    if use_openfaas:
-        # OpenFaaS: use gateway URL with async-function for fire-and-forget calls
-        openfaas_gateway = os.getenv("OPENFAAS_GATEWAY", "http://gateway.openfaas:8080")
-        endpoint = "async-function" if use_async else "function"
-        return f"{openfaas_gateway}/{endpoint}/{service_name}"
-
-    # Kubernetes: use fully qualified DNS name
     return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
 
 
-def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
+def setup_opentelemetry() -> Callable[[], None]:
     """
     Initialize OpenTelemetry instrumentation for traces, metrics, and logs.
 
@@ -110,7 +86,6 @@ def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.instrumentation.flask import FlaskInstrumentor
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -152,9 +127,6 @@ def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
         handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
         logging.getLogger().addHandler(handler)
 
-        if app is not None:
-            FlaskInstrumentor().instrument_app(app)
-
         RequestsInstrumentor().instrument()
 
         logging.info("OpenTelemetry initialized successfully")
@@ -186,15 +158,12 @@ def get_logger(name: str):
     return logging.getLogger(name)
 
 
-flush_opentelemetry = setup_opentelemetry(app)
+flush_opentelemetry = setup_opentelemetry()
 tracer = get_tracer(SERVICE_NAME)
 logger = get_logger(SERVICE_NAME)
 
 # setup the loggers/tracers before importing handler to ensure any logging in handler uses the configured logger
 from function import handler  # noqa: E402
-
-# Export get_service_url for use by handlers that need to call other services
-__all__ = ["get_service_url", "handler", "Context", "Event", "BatchManager"]
 
 
 # BatchManager is used to manage the batching of objects for a specific table. It will
@@ -286,9 +255,9 @@ class BatchManager:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.context.get_caller_headers()}
 
-            # Get service URL for data-ingestion (use async for OpenFaaS fire-and-forget)
+            # Get service URL for data-ingestion
             service_name = os.getenv("SAVE_DATA_FUNCTION", "data-ingestion")
-            url = get_service_url(service_name, use_async=True)
+            url = get_service_url(service_name)
 
             response = requests.post(
                 url,
@@ -321,22 +290,13 @@ class BatchManager:
 
 
 class Event:
-    def __init__(self, execution_mode: str = "http"):
-        if execution_mode == "http":
-            # HTTP mode: read from Flask request
-            self.body = request.get_data()
-            self.headers = request.headers
-            self.method = request.method
-            self.query = request.args
-            self.path = request.path
-        else:
-            # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
-            request_data = os.getenv("REQUEST_DATA", "{}")
-            self.body = request_data.encode()
-            self.headers = {}
-            self.method = "POST"
-            self.query = {}
-            self.path = "/"
+    def __init__(self):
+        request_data = os.getenv("REQUEST_DATA", "{}")
+        self.body = request_data.encode()
+        self.headers = {}
+        self.method = "POST"
+        self.query = {}
+        self.path = "/"
 
 
 class Context:
@@ -779,17 +739,14 @@ class ContextLogger:
         self.log(logging.DEBUG, message, **attributes)
 
 
-def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
-    """Read secrets from available mount paths.
+def get_secrets(context: Context) -> dict[str, str]:
+    """Read secrets from /var/secrets/.
 
-    Supports both OpenFaaS (/var/openfaas/secrets/) and connector-api (/var/secrets/) paths.
-    Both use the same flat file structure: <base-path>/<secret-name> containing the raw value.
+    Uses flat file structure: /var/secrets/<secret-name> containing the raw value.
     """
     secrets_dict: dict[str, str] = {}
 
-    # Both paths use flat file structure (not directories)
-    connector_api_path = "/var/secrets/"
-    openfaas_path = "/var/openfaas/secrets/"
+    secrets_path = "/var/secrets/"
 
     secret_mappings = os.getenv("SECRET_MAPPINGS", "").split(",")
     secret_mappings_dict = {
@@ -799,8 +756,7 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     for key, secret_name in secret_mappings_dict.items():
         secret_value = None
 
-        # Try connector-api path first: /var/secrets/<secret-name>
-        secret_file_path = os.path.join(connector_api_path, secret_name)
+        secret_file_path = os.path.join(secrets_path, secret_name)
         if os.path.isfile(secret_file_path):
             try:
                 with open(secret_file_path) as f:
@@ -813,21 +769,6 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
                     error_type=type(e).__name__,
                 )
 
-        # Fallback to OpenFaaS path: /var/openfaas/secrets/<secret-name>
-        if secret_value is None:
-            secret_file_path = os.path.join(openfaas_path, secret_name)
-            if os.path.isfile(secret_file_path):
-                try:
-                    with open(secret_file_path) as f:
-                        secret_value = f.read().strip()
-                except Exception as e:
-                    context.log.error(
-                        "Error reading secret file",
-                        filename=secret_file_path,
-                        error=str(e),
-                        error_type=type(e).__name__,
-                    )
-
         if secret_value is not None:
             secrets_dict[key] = secret_value
             context.log.info("Loaded secret", secret_key=key)
@@ -837,188 +778,12 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     return secrets_dict
 
 
-def format_status_code(resp):
-    if "statusCode" in resp:
-        return resp["statusCode"]
-
-    return 200
-
-
-def format_body(resp):
-    if "body" not in resp:
-        return ""
-    if type(resp["body"]) is dict:
-        return jsonify(resp["body"])
-    return str(resp["body"])
-
-
-def format_headers(resp):
-    if "headers" not in resp:
-        return []
-    if type(resp["headers"]) is dict:
-        headers = []
-        for key in resp["headers"]:
-            header_tuple = (key, resp["headers"][key])
-            headers.append(header_tuple)
-        return headers
-
-    return resp["headers"]
-
-
-def format_response(resp):
-    if resp is None:
-        return ("", 200)
-
-    if type(resp) is dict:
-        status_code = format_status_code(resp)
-        body = format_body(resp)
-        headers = format_headers(resp)
-
-        return (body, status_code, headers)
-
-    return resp
-
-
-@app.get("/health")
-def health():
-    return jsonify(status="ok")
-
-
-@app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
-@app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
-def call_handler(path: str):
-    with tracer.start_as_current_span("process_request") as span:
-        event = Event()
-        context = Context()
-
-        context.log.info(
-            "Received request",
-            http_method=event.method,
-            http_path=event.path,
-            http_query=dict(event.query),
-        )
-
-        try:
-            local_run = context.run_local == "true"
-
-            # Load secrets from secret files
-            context.secrets = get_secrets(context, local_run)
-
-            request_data = json.loads(event.body)
-            context.scan_execution_id = request_data.get("scanExecutionId")
-            context.parent_execution_id = request_data.get("parentExecutionId") or None
-
-            if not context.secrets:
-                context.log.warning("No secrets loaded from secret files")
-            else:
-                context.log.info(
-                    "Loaded secrets from secret files",
-                    secret_count=len(context.secrets),
-                )
-
-            started_at = datetime.now(UTC).isoformat()
-
-            if context.function_type == "access-scan" or context.function_type == "sync":
-                context.update_execution(status="running")
-                context.log.info("Started operation", function_type=context.function_type)
-
-            with tracer.start_as_current_span("handle_request"):
-                response_data = handler.handle(event, context)
-
-            # Flush remaining rows in all tables
-            context.flush_tables()
-
-            completed_at = datetime.now(UTC).isoformat()
-            if context.function_type == "test-connection" and response_data["statusCode"] == 200:
-                response_data["body"]["startedAt"] = started_at
-                response_data["body"]["completedAt"] = completed_at
-            elif context.function_type == "access-scan" or context.function_type == "sync":
-                if response_data["statusCode"] == 200:
-                    response_data["body"]["startedAt"] = started_at
-                    response_data["body"]["completedAt"] = completed_at
-                    # Check if handler already set a specific status (like 'stopped' or 'paused')
-                    # If not, default to 'completed'
-                    response_status = response_data.get("body", {}).get("status")
-                    if response_status == "stopped":
-                        # Scan was stopped, make sure execution status is updated
-                        context.update_execution(status="stopped", completed_at=completed_at)
-                        context.log.info(
-                            "Scan was stopped",
-                            function_type=context.function_type,
-                            status="stopped",
-                        )
-                    elif response_status == "paused":
-                        # Scan was paused, make sure execution status is updated
-                        context.update_execution(status="paused")
-                        context.log.info(
-                            "Scan was paused",
-                            function_type=context.function_type,
-                            status="paused",
-                        )
-                    else:
-                        # Normal completion - update to completed
-                        context.update_execution(status="completed", completed_at=completed_at)
-                        context.log.info(
-                            f"Completed {context.function_type} operation successfully",
-                            function_type=context.function_type,
-                            status="completed",
-                        )
-                else:
-                    context.update_execution(status="failed", completed_at=completed_at)
-                    context.log.error(
-                        f"Failed {context.function_type} operation",
-                        function_type=context.function_type,
-                        status="failed",
-                        status_code=response_data["statusCode"],
-                    )
-
-            with tracer.start_as_current_span("format_response"):
-                resp = format_response(response_data)
-
-            status_code = 200
-            if isinstance(resp, tuple) and len(resp) >= 2:
-                status_code = resp[1]
-            span.set_attribute("http.status_code", status_code)
-            span.set_status(StatusCode.OK)
-            context.log.info("Request completed", http_status_code=status_code)
-
-            return resp
-        except Exception as e:
-            span.set_attribute("http.status_code", 500)
-            span.record_exception(e)
-            span.set_status(StatusCode.ERROR)
-            context.log.error(
-                "Request failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            raise
-
-
 def handle_shutdown(signum, frame):
     flush_opentelemetry()
 
 
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
-
-
-def get_execution_mode() -> str:
-    """Detect execution mode based on environment.
-
-    Returns:
-        str: 'job' for Kubernetes job mode, 'http' for HTTP server mode
-    """
-    # Explicit mode override
-    if os.getenv("EXECUTION_MODE") == "job":
-        return "job"
-
-    # If REQUEST_DATA is set, assume job mode
-    if os.getenv("REQUEST_DATA"):
-        return "job"
-
-    # Default to HTTP server mode
-    return "http"
 
 
 def run_as_job():
@@ -1048,7 +813,7 @@ def run_as_job():
             scan_execution_id=ctx.scan_execution_id,
         )
 
-        event = Event(execution_mode="job")
+        event = Event()
 
         try:
             # Update execution status to running for scan/sync operations
@@ -1147,22 +912,9 @@ def run_as_job():
         sys.exit(0 if result["success"] else 1)
 
 
-def run_as_http_server():
-    """Start Flask HTTP server for OpenFaaS mode."""
-    port = os.getenv("PORT", 5000)
-    serve(app, host="0.0.0.0", port=port)
-
-
 def main():
-    """Main entry point - detect execution mode and run accordingly."""
-    execution_mode = get_execution_mode()
-
-    if execution_mode == "job":
-        # Job mode: run handler once and exit
-        run_as_job()
-    else:
-        # HTTP mode: start Flask server
-        run_as_http_server()
+    """Main entry point."""
+    run_as_job()
 
 
 if __name__ == "__main__":
