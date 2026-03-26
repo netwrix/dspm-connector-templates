@@ -59,7 +59,7 @@ All templates export distributed traces, metrics, and logs to an OTLP-compatible
 
 ### Secrets
 
-Secrets are loaded from files mounted at `/var/secrets/{name}` (connector-api) or `/var/openfaas/secrets/{name}` (fallback). Access them via `context.Secrets["name"]` (C#) or `context.secrets["name"]` (Python).
+Secrets are loaded from files mounted at `/var/secrets/{name}`. Access them via `context.Secrets["name"]` (C#) or `context.secrets["name"]` (Python).
 
 ## Build
 

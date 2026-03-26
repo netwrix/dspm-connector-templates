@@ -150,7 +150,7 @@ from function import handler  # noqa: E402
 class Event:
     def __init__(self, execution_mode: str = "http"):
         if execution_mode == "http":
-            # OpenFaaS mode: read from Flask request
+            # HTTP mode: read from Flask request
             self.body = request.get_data()
             self.headers = request.headers
             self.method = request.method
@@ -305,13 +305,6 @@ def format_response(resp):
     return resp
 
 
-# Needed for openfaas backwards compatibility. Remove once openfaas is gone.
-@app.get("/_/health")
-def health_openfaas():
-    """OpenFaaS health check endpoint (watchdog convention)"""
-    return jsonify(status="ok")
-
-
 @app.get("/health")
 def health():
     return jsonify(status="ok")
@@ -403,7 +396,7 @@ def get_execution_mode() -> str:
     """Detect execution mode based on environment.
 
     Returns:
-        str: 'job' for connector-api job mode, 'http' for OpenFaaS HTTP mode
+        str: 'job' for connector-api job mode, 'http' for HTTP mode
     """
     # Explicit mode override
     if os.getenv("EXECUTION_MODE") == "job":
@@ -413,7 +406,7 @@ def get_execution_mode() -> str:
     if os.getenv("REQUEST_DATA"):
         return "job"
 
-    # Default to OpenFaaS HTTP mode
+    # Default to HTTP mode
     return "http"
 
 
@@ -522,7 +515,7 @@ def run_as_job():
 
 
 def run_as_http_server():
-    """Start Flask HTTP server for OpenFaaS mode."""
+    """Start Flask HTTP server for http mode."""
     port = os.getenv("PORT", 5000)
     serve(app, host="0.0.0.0", port=port)
 
