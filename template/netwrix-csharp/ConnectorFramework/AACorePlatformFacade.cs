@@ -78,7 +78,7 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade
     /// <summary>
     /// Uploads SiT (State in Time) records to the core platform.
     /// </summary>
-    public async Task UploadSiTRecords(
+    public Task UploadSiTRecords(
         CrawlContext context,
         List<SitObjectImportModel> objectModels,
         List<SitMappingImportModel> mappingModels,
