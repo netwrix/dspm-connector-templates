@@ -14,22 +14,19 @@ public sealed class ConnectorRequestData
     public string Path { get; }
     public IReadOnlyDictionary<string, string> Headers { get; }
     public byte[]? Body { get; }
-    public string? ScanId { get; }
-    public string? ScanExecutionId { get; }
+    public ExecutionContext Execution { get; }
 
     public ConnectorRequestData(
         string Method,
         string Path,
         IReadOnlyDictionary<string, string> Headers,
         byte[]? Body,
-        string? ScanId,
-        string? ScanExecutionId)
+        ExecutionContext Execution)
     {
         this.Method = Method;
         this.Path = Path;
         this.Headers = Headers;
         this.Body = Body;
-        this.ScanId = ScanId;
-        this.ScanExecutionId = ScanExecutionId;
+        this.Execution = Execution;
     }
 }

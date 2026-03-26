@@ -8,13 +8,15 @@ public class StateManagerTests
 {
     private static StateManager CreateManager(
         Mock<RedisSignalHandler>? redisMock = null,
-        SupportedStates? states = null)
+        SupportedStates? states = null,
+        Mock<IScanProgress>? progressMock = null)
     {
         var redis = redisMock?.Object
             ?? new RedisSignalHandler(
                 Mock.Of<StackExchange.Redis.IConnectionMultiplexer>(),
                 NullLogger<RedisSignalHandler>.Instance);
-        return new StateManager(redis, new ScanShutdownService(), NullLogger<StateManager>.Instance, states);
+        var progress = progressMock?.Object ?? Mock.Of<IScanProgress>();
+        return new StateManager(redis, new ScanShutdownService(), progress, NullLogger<StateManager>.Instance, states);
     }
 
     // ── Initialization ─────────────────────────────────────────────────────
@@ -23,7 +25,7 @@ public class StateManagerTests
     public void NewManager_StartsInRunningState()
     {
         var mgr = CreateManager();
-        Assert.Equal("running", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Running, mgr.CurrentState);
     }
 
     [Fact]
@@ -48,38 +50,38 @@ public class StateManagerTests
     public async Task SetState_ValidTransition_Running_To_Stopping_Succeeds()
     {
         var mgr = CreateManager();
-        var result = await mgr.SetStateAsync("stopping");
+        var result = await mgr.SetStateAsync(ScanStatus.Stopping);
         Assert.True(result);
-        Assert.Equal("stopping", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Stopping, mgr.CurrentState);
     }
 
     [Fact]
     public async Task SetState_ValidTransition_Stopping_To_Stopped_Succeeds()
     {
         var mgr = CreateManager();
-        await mgr.SetStateAsync("stopping");
-        var result = await mgr.SetStateAsync("stopped");
+        await mgr.SetStateAsync(ScanStatus.Stopping);
+        var result = await mgr.SetStateAsync(ScanStatus.Stopped);
         Assert.True(result);
-        Assert.Equal("stopped", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Stopped, mgr.CurrentState);
     }
 
     [Fact]
     public async Task SetState_InvalidTransition_Returns_False_And_StateUnchanged()
     {
         var mgr = CreateManager();
-        await mgr.SetStateAsync("stopping");
-        await mgr.SetStateAsync("stopped");
+        await mgr.SetStateAsync(ScanStatus.Stopping);
+        await mgr.SetStateAsync(ScanStatus.Stopped);
 
-        var result = await mgr.SetStateAsync("running"); // invalid from stopped
+        var result = await mgr.SetStateAsync(ScanStatus.Running); // invalid from stopped
         Assert.False(result);
-        Assert.Equal("stopped", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Stopped, mgr.CurrentState);
     }
 
     [Fact]
     public async Task SetState_SameState_Returns_True()
     {
         var mgr = CreateManager();
-        var result = await mgr.SetStateAsync("running");
+        var result = await mgr.SetStateAsync(ScanStatus.Running);
         Assert.True(result);
     }
 
@@ -87,18 +89,18 @@ public class StateManagerTests
     public async Task SetState_ValidTransition_Running_To_Completed()
     {
         var mgr = CreateManager();
-        var result = await mgr.SetStateAsync("completed");
+        var result = await mgr.SetStateAsync(ScanStatus.Completed);
         Assert.True(result);
-        Assert.Equal("completed", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Completed, mgr.CurrentState);
     }
 
     [Fact]
     public async Task SetState_ValidTransition_Running_To_Failed()
     {
         var mgr = CreateManager();
-        var result = await mgr.SetStateAsync("failed");
+        var result = await mgr.SetStateAsync(ScanStatus.Failed);
         Assert.True(result);
-        Assert.Equal("failed", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Failed, mgr.CurrentState);
     }
 
     // ── Pause / Resume transitions ─────────────────────────────────────────
@@ -108,61 +110,61 @@ public class StateManagerTests
     {
         var mgr = CreateManager(states: new SupportedStates(Stop: true, Pause: true, Resume: true));
 
-        Assert.True(await mgr.SetStateAsync("pausing"));
-        Assert.Equal("pausing", mgr.CurrentState);
+        Assert.True(await mgr.SetStateAsync(ScanStatus.Pausing));
+        Assert.Equal(ScanStatus.Pausing, mgr.CurrentState);
 
-        Assert.True(await mgr.SetStateAsync("paused"));
-        Assert.Equal("paused", mgr.CurrentState);
+        Assert.True(await mgr.SetStateAsync(ScanStatus.Paused));
+        Assert.Equal(ScanStatus.Paused, mgr.CurrentState);
 
-        Assert.True(await mgr.SetStateAsync("resuming"));
-        Assert.Equal("resuming", mgr.CurrentState);
+        Assert.True(await mgr.SetStateAsync(ScanStatus.Resuming));
+        Assert.Equal(ScanStatus.Resuming, mgr.CurrentState);
 
-        Assert.True(await mgr.SetStateAsync("running"));
-        Assert.Equal("running", mgr.CurrentState);
+        Assert.True(await mgr.SetStateAsync(ScanStatus.Running));
+        Assert.Equal(ScanStatus.Running, mgr.CurrentState);
     }
 
     [Fact]
     public async Task PausedToStopped_IsValid()
     {
         var mgr = CreateManager();
-        await mgr.SetStateAsync("pausing");
-        await mgr.SetStateAsync("paused");
-        var result = await mgr.SetStateAsync("stopped");
+        await mgr.SetStateAsync(ScanStatus.Pausing);
+        await mgr.SetStateAsync(ScanStatus.Paused);
+        var result = await mgr.SetStateAsync(ScanStatus.Stopped);
         Assert.True(result);
-        Assert.Equal("stopped", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Stopped, mgr.CurrentState);
     }
 
     [Fact]
     public async Task PausedToRunning_IsInvalid()
     {
         var mgr = CreateManager();
-        await mgr.SetStateAsync("pausing");
-        await mgr.SetStateAsync("paused");
-        var result = await mgr.SetStateAsync("running"); // must go through resuming
+        await mgr.SetStateAsync(ScanStatus.Pausing);
+        await mgr.SetStateAsync(ScanStatus.Paused);
+        var result = await mgr.SetStateAsync(ScanStatus.Running); // must go through resuming
         Assert.False(result);
-        Assert.Equal("paused", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Paused, mgr.CurrentState);
     }
 
     [Fact]
     public async Task PausingToStopped_IsInvalid()
     {
         var mgr = CreateManager();
-        await mgr.SetStateAsync("pausing");
-        var result = await mgr.SetStateAsync("stopped");
+        await mgr.SetStateAsync(ScanStatus.Pausing);
+        var result = await mgr.SetStateAsync(ScanStatus.Stopped);
         Assert.False(result);
-        Assert.Equal("pausing", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Pausing, mgr.CurrentState);
     }
 
     [Fact]
     public async Task ResumingToPaused_IsInvalid()
     {
         var mgr = CreateManager();
-        await mgr.SetStateAsync("pausing");
-        await mgr.SetStateAsync("paused");
-        await mgr.SetStateAsync("resuming");
-        var result = await mgr.SetStateAsync("paused");
+        await mgr.SetStateAsync(ScanStatus.Pausing);
+        await mgr.SetStateAsync(ScanStatus.Paused);
+        await mgr.SetStateAsync(ScanStatus.Resuming);
+        var result = await mgr.SetStateAsync(ScanStatus.Paused);
         Assert.False(result);
-        Assert.Equal("resuming", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Resuming, mgr.CurrentState);
     }
 
     // ── Callbacks ──────────────────────────────────────────────────────────
@@ -181,10 +183,10 @@ public class StateManagerTests
             return Task.CompletedTask;
         });
 
-        await mgr.SetStateAsync("stopping");
+        await mgr.SetStateAsync(ScanStatus.Stopping);
 
-        Assert.Equal("running", capturedOld);
-        Assert.Equal("stopping", capturedNew);
+        Assert.Equal(ScanStatus.Running, capturedOld);
+        Assert.Equal(ScanStatus.Stopping, capturedNew);
     }
 
     [Fact]
@@ -196,7 +198,7 @@ public class StateManagerTests
         mgr.OnStateChange((_, _) => { invocations++; return Task.CompletedTask; });
         mgr.OnStateChange((_, _) => { invocations++; return Task.CompletedTask; });
 
-        await mgr.SetStateAsync("stopping");
+        await mgr.SetStateAsync(ScanStatus.Stopping);
 
         Assert.Equal(2, invocations);
     }
@@ -210,7 +212,7 @@ public class StateManagerTests
         mgr.OnStateChange((_, _) => throw new Exception("callback error"));
         mgr.OnStateChange((_, _) => { secondInvoked = true; return Task.CompletedTask; });
 
-        await mgr.SetStateAsync("stopping"); // should not throw
+        await mgr.SetStateAsync(ScanStatus.Stopping); // should not throw
 
         Assert.True(secondInvoked);
     }
@@ -227,11 +229,11 @@ public class StateManagerTests
             return Task.CompletedTask;
         });
 
-        await mgr.SetStateAsync("stopping");
-        await mgr.SetStateAsync("stopped");
+        await mgr.SetStateAsync(ScanStatus.Stopping);
+        await mgr.SetStateAsync(ScanStatus.Stopped);
 
-        Assert.Equal(("running", "stopping"), transitions[0]);
-        Assert.Equal(("stopping", "stopped"), transitions[1]);
+        Assert.Equal((ScanStatus.Running, ScanStatus.Stopping), transitions[0]);
+        Assert.Equal((ScanStatus.Stopping, ScanStatus.Stopped), transitions[1]);
     }
 
     // ── Shutdown ──────────────────────────────────────────────────────────
@@ -248,11 +250,11 @@ public class StateManagerTests
         redisMock.Setup(r => r.CleanupStreamsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var mgr = new StateManager(redisMock.Object, new ScanShutdownService(), NullLogger<StateManager>.Instance);
-        var result = await mgr.ShutdownAsync("exec-123", "completed");
+        var mgr = new StateManager(redisMock.Object, new ScanShutdownService(), Mock.Of<IScanProgress>(), NullLogger<StateManager>.Instance);
+        var result = await mgr.ShutdownAsync("exec-123", ScanStatus.Completed);
 
         Assert.True(result);
-        Assert.Equal("completed", mgr.CurrentState);
+        Assert.Equal(ScanStatus.Completed, mgr.CurrentState);
         Assert.True(mgr.IsShutdown);
     }
 
@@ -263,12 +265,12 @@ public class StateManagerTests
             Mock.Of<StackExchange.Redis.IConnectionMultiplexer>(),
             NullLogger<RedisSignalHandler>.Instance);
 
-        var mgr = new StateManager(redisMock.Object, new ScanShutdownService(), NullLogger<StateManager>.Instance);
-        await mgr.SetStateAsync("stopping");
-        await mgr.SetStateAsync("stopped");
+        var mgr = new StateManager(redisMock.Object, new ScanShutdownService(), Mock.Of<IScanProgress>(), NullLogger<StateManager>.Instance);
+        await mgr.SetStateAsync(ScanStatus.Stopping);
+        await mgr.SetStateAsync(ScanStatus.Stopped);
 
         // stopped -> completed is invalid
-        var result = await mgr.ShutdownAsync("exec-123", "completed");
+        var result = await mgr.ShutdownAsync("exec-123", ScanStatus.Completed);
 
         Assert.False(result);
     }
@@ -285,12 +287,49 @@ public class StateManagerTests
         redisMock.Setup(r => r.CleanupStreamsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var mgr = new StateManager(redisMock.Object, new ScanShutdownService(), NullLogger<StateManager>.Instance);
+        var mgr = new StateManager(redisMock.Object, new ScanShutdownService(), Mock.Of<IScanProgress>(), NullLogger<StateManager>.Instance);
         Assert.False(mgr.Token.IsCancellationRequested);
 
-        await mgr.ShutdownAsync("exec-123", "completed");
+        await mgr.ShutdownAsync("exec-123", ScanStatus.Completed);
 
         Assert.True(mgr.Token.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task Shutdown_Failed_CallsUpdateExecutionAsync_WithFailedStatus()
+    {
+        var progressMock = new Mock<IScanProgress>();
+        var mgr = CreateManager(progressMock: progressMock);
+
+        await mgr.ShutdownAsync("exec-123", ScanStatus.Failed);
+
+        progressMock.Verify(p => p.UpdateExecutionAsync(
+            ScanStatus.Failed, null, null, It.IsAny<DateTimeOffset?>(), 0, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Shutdown_Completed_CallsUpdateExecutionAsync_WithNonNullCompletedAt()
+    {
+        var progressMock = new Mock<IScanProgress>();
+        var mgr = CreateManager(progressMock: progressMock);
+
+        await mgr.ShutdownAsync("exec-123", ScanStatus.Completed);
+
+        progressMock.Verify(p => p.UpdateExecutionAsync(
+            ScanStatus.Completed, null, null, It.IsNotNull<DateTimeOffset?>(), 0, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Shutdown_Paused_CallsUpdateExecutionAsync_WithNullCompletedAt()
+    {
+        var progressMock = new Mock<IScanProgress>();
+        var mgr = CreateManager(progressMock: progressMock);
+        await mgr.SetStateAsync(ScanStatus.Pausing);
+
+        await mgr.ShutdownAsync("exec-123", ScanStatus.Paused);
+
+        progressMock.Verify(p => p.UpdateExecutionAsync(
+            ScanStatus.Paused, null, null, null, 0, default), Times.Once);
     }
 
     // ── Dispose ───────────────────────────────────────────────────────────

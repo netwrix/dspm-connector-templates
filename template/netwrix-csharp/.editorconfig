@@ -464,6 +464,11 @@ dotnet_diagnostic.IDE0161.severity = silent
 dotnet_diagnostic.IDE0005.severity = silent
 
 
+# Template function stub — suppress unused-parameter warnings so the signature
+# remains readable for implementors who will fill in the body.
+[function/**.cs]
+dotnet_diagnostic.IDE0060.severity = none
+
 # Verify settings
 [*.{received,verified}.{txt,xml,json}]
 charset = "utf-8-bom"

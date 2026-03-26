@@ -16,8 +16,9 @@ public sealed class BatchManager : IAsyncDisposable
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ConnectorRequestData _requestData;
     private readonly ILogger<BatchManager> _logger;
+    private readonly Func<int, CancellationToken, Task>? _onFlushed;
 
-    private readonly Channel<byte[]> _flushChannel;
+    private readonly Channel<(byte[] Data, int Count, CancellationToken Ct)> _flushChannel;
     private readonly Task _flushWorker;
 
     // Single-writer guarantee: AddObject is called from the connector's scan loop, never concurrently per table.
@@ -29,16 +30,18 @@ public sealed class BatchManager : IAsyncDisposable
         string tableName,
         IHttpClientFactory httpClientFactory,
         ConnectorRequestData requestData,
-        ILogger<BatchManager> logger)
+        ILogger<BatchManager> logger,
+        Func<int, CancellationToken, Task>? onFlushed = null)
     {
         _tableName = tableName;
         _httpClientFactory = httpClientFactory;
         _requestData = requestData;
         _logger = logger;
+        _onFlushed = onFlushed;
 
         _buffer = NewBuffer();
 
-        _flushChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+        _flushChannel = Channel.CreateUnbounded<(byte[], int, CancellationToken)>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = true,
@@ -53,7 +56,9 @@ public sealed class BatchManager : IAsyncDisposable
     /// Adds an object to the buffer. If the buffer exceeds 500 KB, an async flush is triggered.
     /// This method is synchronous — it never performs I/O.
     /// </summary>
-    public void AddObject(object obj)
+    /// <param name="obj">The object to add.</param>
+    /// <param name="updateStatus">When true (default), counts this object for completion reporting.</param>
+    public void AddObject(object obj, bool updateStatus = true)
     {
         if (obj is null)
         {
@@ -73,7 +78,8 @@ public sealed class BatchManager : IAsyncDisposable
             if (_buffer.Length + enhancedBytes.Length > ThresholdBytes && _buffer.Length > 1)
             {
                 var snapshot = FinaliseBuffer();
-                if (!_flushChannel.Writer.TryWrite(snapshot))
+                // AddObject has no ct — batches auto-enqueued mid-scan use None.
+                if (!_flushChannel.Writer.TryWrite((snapshot.Data, snapshot.Count, CancellationToken.None)))
                 {
                     _logger.LogError("Failed to enqueue batch for table {Table} — channel is closed", _tableName);
                 }
@@ -84,7 +90,10 @@ public sealed class BatchManager : IAsyncDisposable
 
             _buffer.Write(enhancedBytes);
             _buffer.WriteByte((byte)',');
-            _pendingObjectCount++;
+            if (updateStatus)
+            {
+                _pendingObjectCount++;
+            }
         }
         finally
         {
@@ -101,7 +110,8 @@ public sealed class BatchManager : IAsyncDisposable
         if (_buffer.Length > 1)
         {
             var snapshot = FinaliseBuffer();
-            if (!_flushChannel.Writer.TryWrite(snapshot))
+            // Propagate ct so the _onFlushed callback (progress reporting) respects cancellation.
+            if (!_flushChannel.Writer.TryWrite((snapshot.Data, snapshot.Count, ct)))
             {
                 _logger.LogError("Failed to enqueue final batch for table {Table} — channel is closed", _tableName);
             }
@@ -123,23 +133,20 @@ public sealed class BatchManager : IAsyncDisposable
         return ms;
     }
 
-    private byte[] FinaliseBuffer()
+    private (byte[] Data, int Count) FinaliseBuffer()
     {
         // _buffer.ToArray() returns a new copy — safe to mutate the trailing comma to ']'
         var result = _buffer.ToArray();
         result[^1] = (byte)']';
-        return result;
+        return (result, _pendingObjectCount);
     }
 
-    private byte[] BuildEnhancedObject(object obj)
+    private static byte[] BuildEnhancedObject(object obj)
     {
         using var ms = new MemoryStream();
         using var writer = new Utf8JsonWriter(ms);
 
         writer.WriteStartObject();
-        writer.WriteString("scan_id", _requestData.ScanId ?? "");
-        writer.WriteString("scan_execution_id", _requestData.ScanExecutionId ?? "");
-        writer.WriteString("scanned_at", DateTimeOffset.UtcNow.ToString("O"));
 
         // Copy the connector object's properties after the injected framework fields
         using var doc = JsonSerializer.SerializeToDocument(obj);
@@ -149,19 +156,20 @@ public sealed class BatchManager : IAsyncDisposable
         }
 
         writer.WriteEndObject();
+        // Synchronous flush is safe here: the backing stream is an in-memory MemoryStream.
         writer.Flush();
         return ms.ToArray();
     }
 
     private async Task RunFlushWorkerAsync()
     {
-        await foreach (var payload in _flushChannel.Reader.ReadAllAsync())
+        await foreach (var (payload, count, ct) in _flushChannel.Reader.ReadAllAsync())
         {
-            await PostBatchAsync(payload);
+            await PostBatchAsync(payload, count, ct);
         }
     }
 
-    private async Task PostBatchAsync(byte[] dataArray)
+    private async Task PostBatchAsync(byte[] dataArray, int count, CancellationToken ct)
     {
         var sourceType = Environment.GetEnvironmentVariable("SOURCE_TYPE") ?? "";
 
@@ -193,9 +201,16 @@ public sealed class BatchManager : IAsyncDisposable
                 request.Headers.TryAddWithoutValidation(k, v);
             }
 
-            var response = await client.SendAsync(request);
+            var response = await client.SendAsync(request, ct);
 
-            if (!response.IsSuccessStatusCode)
+            if (response.IsSuccessStatusCode)
+            {
+                if (_onFlushed is not null && count > 0)
+                {
+                    await _onFlushed(count, ct);
+                }
+            }
+            else
             {
                 _logger.LogWarning("Batch flush returned {StatusCode} for table {Table}", (int)response.StatusCode, _tableName);
             }
@@ -208,14 +223,14 @@ public sealed class BatchManager : IAsyncDisposable
 
     private IEnumerable<KeyValuePair<string, string>> GetCallerHeaders()
     {
-        if (_requestData.ScanId is not null)
+        if (_requestData.Execution.ScanId is not null)
         {
-            yield return new("Scan-Id", _requestData.ScanId);
+            yield return new("Scan-Id", _requestData.Execution.ScanId);
         }
 
-        if (_requestData.ScanExecutionId is not null)
+        if (_requestData.Execution.ScanExecutionId is not null)
         {
-            yield return new("Scan-Execution-Id", _requestData.ScanExecutionId);
+            yield return new("Scan-Execution-Id", _requestData.Execution.ScanExecutionId);
         }
     }
 
