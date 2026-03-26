@@ -194,8 +194,12 @@ logger = get_logger(SERVICE_NAME)
 from function import handler  # noqa: E402
 
 
+# Default flush threshold in bytes (5 MB). Override via BATCH_FLUSH_THRESHOLD_BYTES env var.
+DEFAULT_BATCH_FLUSH_THRESHOLD_BYTES: Final[int] = 5_000_000
+
+
 # BatchManager is used to manage the batching of objects for a specific table. It will
-# automatically flush the batch when the size of the batch exceeds 1MB.
+# automatically flush the batch when the size exceeds the configured threshold.
 # It will also update the execution status when the batch is flushed.
 # This class is thread-safe and can be used by multiple threads to add objects to the batch.
 class BatchManager:
@@ -206,6 +210,9 @@ class BatchManager:
         self.rows = b"["  # bytes instead of array for efficient size checks
         self.increment_completed_objects = 0
         self.lock = threading.Lock()
+        self.flush_threshold = int(
+            os.getenv("BATCH_FLUSH_THRESHOLD_BYTES", str(DEFAULT_BATCH_FLUSH_THRESHOLD_BYTES))
+        )
 
     def add_object(self, obj: object, update_status: bool = True) -> None:
         if obj is None:
@@ -238,12 +245,11 @@ class BatchManager:
         rows_to_flush = None
         count_to_flush = 0
 
-        # Set the max size to 500 KB to accommodate for the
-        # overhead of the additional fields in the request. This is a good
-        # compromise between performance and memory usage and keeps us
-        # below the NATS payload limit.
+        # Flush when adding this object would exceed the configured
+        # threshold. The default (5 MB) balances throughput against
+        # memory usage and stays within typical message-broker limits.
         with self.lock:
-            if size + self.size > 500000:
+            if size + self.size > self.flush_threshold:
                 # Swap out the full buffer while holding the lock (nanoseconds),
                 # then send it outside the lock so other threads are not blocked
                 # during the HTTP call.
