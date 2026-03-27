@@ -1,6 +1,6 @@
 # dspm-connector-templates
 
-Function templates for building DSPM connectors. Each template provides the runtime scaffolding — HTTP server, job-mode runner, OpenTelemetry instrumentation, Redis-based stop/pause/resume signals, and batched data ingestion — so connector authors only need to implement their scanning logic.
+Function templates for building DSPM connectors. Each template provides the runtime scaffolding — OpenTelemetry instrumentation, Redis-based stop/pause/resume signals, and batched data ingestion — so connector authors only need to implement their scanning logic.
 
 ## Templates
 
@@ -36,12 +36,12 @@ functions:
 
 ## Template Features
 
-### Dual Execution Modes
+### Execution Modes
 
-All templates support two execution modes controlled by the `EXECUTION_MODE` environment variable:
+Each template uses a single execution mode:
 
-- **HTTP mode** (default): starts a long-running HTTP server (Flask/Waitress for Python, ASP.NET Core for C#).
-- **Job mode** (`EXECUTION_MODE=job`): runs the handler once and exits. Used for Kubernetes jobs invoked by the connector-api.
+- **Job mode** (`netwrix-python`, `netwrix-csharp`): runs the handler once and exits. Used for Kubernetes jobs invoked by the connector-api. Request data is read from the `REQUEST_DATA` environment variable.
+- **HTTP mode** (`netwrix-internal-python`, `netwrix-internal-csharp`): starts a long-running HTTP server (Flask/Waitress for Python, ASP.NET Core for C#). Used for internal platform functions.
 
 ### Stop / Pause / Resume
 
@@ -59,7 +59,7 @@ All templates export distributed traces, metrics, and logs to an OTLP-compatible
 
 ### Secrets
 
-Secrets are loaded from files mounted at `/var/secrets/{name}` (connector-api) or `/var/openfaas/secrets/{name}` (fallback). Access them via `context.Secrets["name"]` (C#) or `context.secrets["name"]` (Python).
+Secrets are loaded from files mounted at `/var/secrets/{name}`. Access them via `context.Secrets["name"]` (C#) or `context.secrets["name"]` (Python).
 
 ## Build
 
@@ -123,7 +123,7 @@ dotnet test ConnectorFramework.Tests/ConnectorFramework.Tests.csproj
 
 ## Deploy
 
-Connector containers are built as multi-stage Docker images and distributed via the Keygen OCI registry (`oci.pkg.keygen.sh`). Connector repositories reference these templates in their `stack.yml`, and images are built and pushed by CI/CD pipelines. Set `EXECUTION_MODE=job` for Kubernetes Job deployments or leave unset for long-running HTTP server mode.
+Connector containers are built as multi-stage Docker images and distributed via the Keygen OCI registry (`oci.pkg.keygen.sh`). Connector repositories reference these templates in their `stack.yml`, and images are built and pushed by CI/CD pipelines.
 
 ## Contributing
 
