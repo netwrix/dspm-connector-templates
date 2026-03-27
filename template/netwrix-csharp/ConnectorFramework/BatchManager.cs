@@ -205,6 +205,10 @@ public sealed class BatchManager : IAsyncDisposable
 
             if (response.IsSuccessStatusCode)
             {
+                var tableTag = new KeyValuePair<string, object?>("table", _tableName);
+                ConnectorMetrics.BatchSize.Record(count, tableTag);
+                ConnectorMetrics.ObjectsUploaded.Add(count, tableTag);
+
                 if (_onFlushed is not null && count > 0)
                 {
                     await _onFlushed(count, ct);

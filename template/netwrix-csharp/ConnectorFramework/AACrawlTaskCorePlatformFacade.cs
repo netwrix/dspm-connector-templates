@@ -21,6 +21,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     private readonly ConcurrentQueue<ApiChildCrawlTask> _crawlTaskQueue = new();
     private readonly ConcurrentDictionary<Guid, int> _processedItems = new();
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
+    private readonly ConcurrentDictionary<Guid, long> _taskStartTimestamps = new();
     private int _reportedItemsCount;
     private long _lastUpdateTimestamp = Stopwatch.GetTimestamp();
     // CAS guard: 0 = idle, 1 = updating. Prevents two concurrent callers from both
@@ -89,6 +90,9 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         {
             throw new InvalidOperationException("Initialize() must be called before StartTask.");
         }
+
+        _taskStartTimestamps[crawlTaskReference] = Stopwatch.GetTimestamp();
+        ConnectorMetrics.TasksStarted.Add(1);
 
         return Task.FromResult(new CrawlTaskConfiguration
         {
@@ -168,6 +172,13 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         {
             _crawlTaskQueue.Enqueue(childTask);
         }
+
+        // Record task duration and completion metric.
+        if (_taskStartTimestamps.TryRemove(taskProgress.CrawlTaskReference, out var startTimestamp))
+        {
+            ConnectorMetrics.TaskDuration.Record(Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
+        }
+        ConnectorMetrics.TasksCompleted.Add(1);
 
         // Remove the finalized task's entries to prevent unbounded memory growth
         // on long-running connectors with many child tasks.

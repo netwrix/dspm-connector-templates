@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Http;
 using Netwrix.Overlord.Sdk.Core.Storage;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
@@ -127,6 +128,7 @@ internal static class Program
         Activity? jobActivity = null;
         FunctionContext? context = null;
         var isLongRunning = false;
+        var executionStopwatch = Stopwatch.StartNew();
         try
         {
             await using var scope = host.Services.CreateAsyncScope();
@@ -170,6 +172,10 @@ internal static class Program
                 }
                 await context.FlushTablesAsync();
 
+                ConnectorMetrics.ExecutionDuration.Record(
+                    executionStopwatch.Elapsed.TotalSeconds,
+                    new KeyValuePair<string, object?>("status", "succeeded"));
+
                 jobActivity?.SetStatus(ActivityStatusCode.Ok);
 
                 Console.WriteLine(JsonSerializer.Serialize(result));
@@ -178,6 +184,10 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            ConnectorMetrics.ExecutionDuration.Record(
+                executionStopwatch.Elapsed.TotalSeconds,
+                new KeyValuePair<string, object?>("status", "failed"));
+
             jobActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             jobActivity?.RecordException(ex);
             logger.LogError(ex, "Job failed");
@@ -223,6 +233,10 @@ internal static class Program
         // RedisSignalHandler accepts IConnectionMultiplexer? and degrades gracefully.
 
         services.AddHttpClient();
+        // Apply rate-limit tracking to every named HttpClient (including connector-developer clients).
+        services.ConfigureAll<HttpClientFactoryOptions>(options =>
+            options.HttpMessageHandlerBuilderActions.Add(
+                b => b.AdditionalHandlers.Add(new RateLimitTrackingHandler())));
         services.AddScoped<RedisSignalHandler>(sp => new RedisSignalHandler(
             sp.GetService<IConnectionMultiplexer>(),       // null if REDIS_URL not set
             sp.GetRequiredService<ILogger<RedisSignalHandler>>()));
@@ -308,6 +322,11 @@ internal static class Program
             {
                 ["service.namespace"] = "dspm-connectors",
                 ["deployment.environment"] = environment,
+                // Execution context — allows Prometheus to correlate all metrics from
+                // this connector process with a specific scan execution.
+                ["scan_execution_id"] = Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID") ?? "",
+                ["scan_id"] = Environment.GetEnvironmentVariable("SCAN_ID") ?? "",
+                ["source_id"] = Environment.GetEnvironmentVariable("SOURCE_ID") ?? "",
             });
 
         services.AddOpenTelemetry()
@@ -331,6 +350,7 @@ internal static class Program
             .WithMetrics(metrics =>
             {
                 metrics.SetResourceBuilder(resourceBuilder)
+                    .AddMeter(ConnectorMetrics.MeterName)
                     .AddHttpClientInstrumentation();
 
                 if (isHttpMode)
@@ -338,11 +358,15 @@ internal static class Program
                     metrics.AddAspNetCoreInstrumentation();
                 }
 
-                metrics.AddOtlpExporter(o =>
-                {
-                    o.Endpoint = new Uri($"{otelEndpoint}/v1/metrics");
-                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
-                });
+                metrics.AddOtlpExporter(
+                    (o, readerOptions) =>
+                    {
+                        o.Endpoint = new Uri($"{otelEndpoint}/v1/metrics");
+                        o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                        // Export every 15 s so short-lived job-mode connectors produce
+                        // enough data points for timeseries graphs (default is 60 s).
+                        readerOptions.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 15_000;
+                    });
             })
             .WithLogging(
                 logging =>
