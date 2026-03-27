@@ -6,7 +6,6 @@ import sys
 # already-loaded module instead of re-executing the file.
 sys.modules.setdefault("index", sys.modules[__name__])
 
-import json
 import logging
 import os
 import signal
@@ -148,22 +147,12 @@ from function import handler  # noqa: E402
 
 
 class Event:
-    def __init__(self, execution_mode: str = "http"):
-        if execution_mode == "http":
-            # HTTP mode: read from Flask request
-            self.body = request.get_data()
-            self.headers = request.headers
-            self.method = request.method
-            self.query = request.args
-            self.path = request.path
-        else:
-            # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
-            request_data = os.getenv("REQUEST_DATA", "{}")
-            self.body = request_data.encode()
-            self.headers = {}
-            self.method = "POST"
-            self.query = {}
-            self.path = "/"
+    def __init__(self):
+        self.body = request.get_data()
+        self.headers = request.headers
+        self.method = request.method
+        self.query = request.args
+        self.path = request.path
 
 
 class Context:
@@ -173,7 +162,6 @@ class Context:
         self.meter = meter
         self.log = ContextLogger(self)
         self.caller_attributes = caller_attributes
-        self.execution_mode = "http"
 
     def create_thread(self, target, *args, **kwargs):
         """
@@ -392,128 +380,6 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 
 
-def get_execution_mode() -> str:
-    """Detect execution mode based on environment.
-
-    Returns:
-        str: 'job' for connector-api job mode, 'http' for HTTP mode
-    """
-    # Explicit mode override
-    if os.getenv("EXECUTION_MODE") == "job":
-        return "job"
-
-    # If REQUEST_DATA is set, assume job mode
-    if os.getenv("REQUEST_DATA"):
-        return "job"
-
-    # Default to HTTP mode
-    return "http"
-
-
-def run_as_job():
-    """Execute handler once as a Kubernetes job."""
-    # Create a new span when trace isolation is enabled
-    if TRACE_ISOLATION_ENABLED:
-        with tracer.start_as_current_span("job_execution") as span:
-            ctx = Context({})
-
-            ctx.log.info(
-                "Starting job execution",
-                execution_mode="job",
-            )
-
-            ctx.execution_mode = "job"
-
-            event = Event(execution_mode="job")
-
-            try:
-                # Run the handler
-                response = handler.handle(event, ctx)
-
-                # Determine final status
-                status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
-                success = status_code == 200
-
-                # Output result as JSON to stdout
-                result = {
-                    "success": success,
-                    "statusCode": status_code,
-                    "body": response.get("body", {}) if isinstance(response, dict) else response,
-                }
-
-                span.set_attribute("job.status_code", status_code)
-                span.set_status(StatusCode.OK if success else StatusCode.ERROR)
-                ctx.log.info("Job execution completed", success=success)
-
-            except Exception as e:
-                span.record_exception(e)
-                span.set_status(StatusCode.ERROR)
-                ctx.log.error(
-                    "Job execution failed",
-                    error_type=type(e).__name__,
-                    error_message=str(e),
-                )
-
-                result = {
-                    "success": False,
-                    "statusCode": 500,
-                    "body": {"error": str(e)},
-                }
-
-            # Flush OpenTelemetry before exiting
-            flush_opentelemetry()
-
-            print(json.dumps(result))
-            sys.exit(0 if result["success"] else 1)
-    else:
-        ctx = Context({})
-
-        ctx.log.info(
-            "Starting job execution",
-            execution_mode="job",
-        )
-
-        ctx.execution_mode = "job"
-
-        event = Event(execution_mode="job")
-
-        try:
-            # Run the handler
-            response = handler.handle(event, ctx)
-
-            # Determine final status
-            status_code = response.get("statusCode", 500) if isinstance(response, dict) else 200
-            success = status_code == 200
-
-            # Output result as JSON to stdout
-            result = {
-                "success": success,
-                "statusCode": status_code,
-                "body": response.get("body", {}) if isinstance(response, dict) else response,
-            }
-
-            ctx.log.info("Job execution completed", success=success)
-
-        except Exception as e:
-            ctx.log.error(
-                "Job execution failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-
-            result = {
-                "success": False,
-                "statusCode": 500,
-                "body": {"error": str(e)},
-            }
-
-        # Flush OpenTelemetry before exiting
-        flush_opentelemetry()
-
-        print(json.dumps(result))
-        sys.exit(0 if result["success"] else 1)
-
-
 def run_as_http_server():
     """Start Flask HTTP server for http mode."""
     port = os.getenv("PORT", 5000)
@@ -521,15 +387,8 @@ def run_as_http_server():
 
 
 def main():
-    """Main entry point - detect execution mode and run accordingly."""
-    execution_mode = get_execution_mode()
-
-    if execution_mode == "job":
-        # Job mode: run handler once and exit
-        run_as_job()
-    else:
-        # HTTP mode: start Flask server
-        run_as_http_server()
+    """Main entry point."""
+    run_as_http_server()
 
 
 if __name__ == "__main__":

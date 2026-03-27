@@ -1,6 +1,6 @@
 # Architecture Overview
 
-`dspm-connector-templates` provides the runtime scaffolding for all DSPM connector functions. Each template bundles an HTTP server, job-mode runner, OpenTelemetry instrumentation, Redis stop/pause/resume signal handling, and (for connector templates) batched data ingestion. Connector authors implement one file — `handler.py` or `Handler.cs` — and the template handles everything else.
+`dspm-connector-templates` provides the runtime scaffolding for all DSPM connector functions. Each template bundles OpenTelemetry instrumentation, and (for connector templates) Redis stop/pause/resume signal handling and batched data ingestion. Connector authors implement one file — `handler.py` or `Handler.cs` — and the template handles everything else.
 
 ## 1. Project Structure
 
@@ -8,7 +8,7 @@
 /
 ├── template/
 │   ├── netwrix-python/              # Python connector template
-│   │   ├── index.py                 # HTTP server + job-mode entrypoint
+│   │   ├── index.py                 # Job-mode entrypoint
 │   │   ├── redis_signal_handler.py  # Redis Streams client for control signals
 │   │   ├── state_manager.py         # Stop/pause/resume state machine
 │   │   ├── pyproject.toml           # Python dependencies (managed by uv)
@@ -16,14 +16,14 @@
 │   │   └── function/
 │   │       └── handler.py           # Connector author implements this
 │   ├── netwrix-internal-python/     # Python template for internal functions
-│   │   ├── index.py                 # HTTP server + job-mode entrypoint
+│   │   ├── index.py                 # HTTP server entrypoint (Flask/Waitress)
 │   │   ├── pyproject.toml
 │   │   ├── Dockerfile
 │   │   └── function/
 │   │       └── handler.py
 │   ├── netwrix-csharp/              # C# connector template
 │   │   ├── ConnectorFramework/      # Core runtime library (do not modify)
-│   │   │   ├── Program.cs           # HTTP + job-mode bootstrap, handler discovery
+│   │   │   ├── Program.cs           # Job-mode bootstrap, handler discovery
 │   │   │   ├── FunctionContext.cs   # Per-request DI context (secrets, tables, spans)
 │   │   │   ├── IConnectorHandler.cs # Interface connector handlers must implement
 │   │   │   ├── BatchManager.cs      # Buffered async data ingestion
@@ -52,7 +52,7 @@
 ```mermaid
 graph TD
     subgraph "Connector Container (runtime per function)"
-        A[HTTP Server / Job Runner<br/>index.py · Program.cs] --> B[handler.py / Handler.cs<br/>connector scan logic]
+        A[Entrypoint<br/>index.py · Program.cs] --> B[handler.py / Handler.cs<br/>connector scan logic]
         B --> C[FunctionContext / Context<br/>secrets · logging · tracing]
         C --> D[BatchManager<br/>500 KB buffer]
         C --> E[StateManager<br/>stop · pause · resume]
@@ -78,21 +78,21 @@ graph TD
 
 ### 3.1. netwrix-python
 
-**Description:** Python connector template for external source and IAM connectors. Runs as a Flask/Waitress HTTP server or a one-shot Kubernetes job, selected by the `EXECUTION_MODE` environment variable. Provides `StateManager` and `RedisSignalHandler` for graceful stop/pause/resume, and a `Context` object with structured logging and OpenTelemetry tracing.
+**Description:** Python connector template for external source and IAM connectors. Runs as a one-shot Kubernetes job — the handler executes once and exits. Request data is read from the `REQUEST_DATA` environment variable. Provides `StateManager` and `RedisSignalHandler` for graceful stop/pause/resume, and a `Context` object with structured logging and OpenTelemetry tracing.
 
-**Technologies:** Python 3.12, Flask, Waitress, Redis, OpenTelemetry SDK, uv
+**Technologies:** Python 3.12, Redis, OpenTelemetry SDK, uv
 
 **Key files:** `index.py` (entrypoint), `state_manager.py`, `redis_signal_handler.py`, `function/handler.py` (connector author fills this)
 
 ### 3.2. netwrix-internal-python
 
-**Description:** Simplified Python template for internal platform functions (e.g., `data-ingestion`, `regex-match`, `sensitive-data-orchestrator`). Same HTTP/job dual-mode entrypoint as `netwrix-python` but without connector-specific `StateManager` or `BatchManager`. Provides the same `Context`/`ContextLogger` and OpenTelemetry setup.
+**Description:** Simplified Python template for internal platform functions (e.g., `data-ingestion`, `regex-match`, `sensitive-data-orchestrator`). Runs as a long-running Flask/Waitress HTTP server. Does not include connector-specific `StateManager` or `BatchManager`. Provides `Context`/`ContextLogger` and OpenTelemetry setup.
 
 **Technologies:** Python 3.12, Flask, Waitress, OpenTelemetry SDK, uv
 
 ### 3.3. netwrix-csharp
 
-**Description:** C# (.NET 8) connector template with a full `ConnectorFramework` runtime library. At startup, `Program.cs` discovers the connector's `IConnectorHandler` implementation via reflection and registers it in DI. Supports HTTP mode (ASP.NET Core Minimal API, long-running scans run in background scopes) and job mode (single `HandleJobAsync` invocation). `FunctionContext` provides secrets, per-table `BatchManager` instances, checkpoint state via Redis, execution progress reporting, and OpenTelemetry spans. `StateManager` polls Redis for STOP/PAUSE/RESUME signals and exposes a `CancellationToken` that is cancelled on STOP.
+**Description:** C# (.NET 8) connector template with a full `ConnectorFramework` runtime library. At startup, `Program.cs` discovers the connector's `IConnectorHandler` implementation via reflection and registers it in DI. Runs as a Kubernetes job (single `HandleJobAsync` invocation). `FunctionContext` provides secrets, per-table `BatchManager` instances, checkpoint state via Redis, execution progress reporting, and OpenTelemetry spans. `StateManager` polls Redis for STOP/PAUSE/RESUME signals and exposes a `CancellationToken` that is cancelled on STOP.
 
 **Technologies:** .NET 8, ASP.NET Core, StackExchange.Redis, OpenTelemetry .NET SDK
 
@@ -127,7 +127,7 @@ Service URLs default to Kubernetes service DNS names inside the `access-analyzer
 ## 6. Deployment & Infrastructure
 
 - **Build:** Multi-stage Docker builds. Python images use `uv` for reproducible dependency installation from `uv.lock`. C# images use a .NET SDK build stage publishing to an ASP.NET runtime stage.
-- **Execution models:** HTTP mode for long-running servers; Job mode (`EXECUTION_MODE=job`) for Kubernetes Jobs invoked by the connector-api.
+- **Execution models:** Connector templates (`netwrix-python`, `netwrix-csharp`) run as one-shot Kubernetes Jobs. Internal templates (`netwrix-internal-python`, `netwrix-internal-csharp`) run as long-running HTTP servers.
 - **Non-root:** All Dockerfiles create a non-root `app` user and run all application code under that user.
 - **CI/CD:** GitHub Actions — `.github/workflows/ruff.yml` lints and format-checks `template/netwrix-python` on every push/PR to `main`.
 - **Registry:** Container images distributed via the Keygen OCI registry (`oci.pkg.keygen.sh`).
