@@ -22,7 +22,7 @@ class DataQueryClient:
     Interface for querying ClickHouse via the data-query service.
 
     Uses ``get_service_url`` from the connector template to resolve the
-    data-query endpoint across all deployment modes (local, Kubernetes, OpenFaaS).
+    data-query endpoint across all deployment modes.
 
     Usage::
 
