@@ -1,12 +1,10 @@
 ARG PYTHON_VERSION=3.12
 FROM --platform=${TARGETPLATFORM:-linux/amd64} python:${PYTHON_VERSION}-alpine AS build
 
-COPY --from=ghcr.io/openfaas/of-watchdog:0.10.7 /fwatchdog /usr/bin/fwatchdog
-RUN chmod +x /usr/bin/fwatchdog
-
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
 ARG DEBUG_MODE="false"
+ARG FUNCTION_DIR
 
 RUN --mount=type=cache,target=/var/cache/apk \
     if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk upgrade; fi && \
@@ -17,7 +15,6 @@ RUN addgroup -S app && adduser app -S -G app
 RUN chown app /home/app
 
 # Create /app/run entrypoint for connector-api job mode
-# This allows the connector-api to invoke the handler directly without Flask
 RUN mkdir -p /app && \
     printf '#!/bin/sh\nexec python /home/app/index.py\n' > /app/run && \
     chmod +x /app/run
@@ -37,9 +34,9 @@ ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
 
 # Template specific steps
 WORKDIR /home/app/
-COPY --chown=app:app index.py           .
-COPY --chown=app:app pyproject.toml     .
-COPY --chown=app:app uv.lock            .
+COPY --chown=app:app ./template/netwrix-python/index.py           .
+COPY --chown=app:app ./template/netwrix-python/pyproject.toml     .
+COPY --chown=app:app ./template/netwrix-python/uv.lock            .
 USER root
 RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
@@ -55,7 +52,7 @@ USER app
 RUN mkdir -p function
 RUN touch ./function/__init__.py
 WORKDIR /home/app/function/
-COPY --chown=app:app function/requirements.txt  .
+COPY --chown=app:app ${FUNCTION_DIR}/requirements.txt  .
 
 # install function code
 USER root
@@ -63,19 +60,17 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
     uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
-COPY --chown=app:app function/   .
+# Copy template-provided function files (state_manager, redis_signal_handler, etc)
+COPY --chown=app:app ./template/netwrix-python/function/ .
+COPY --chown=app:app ./template/netwrix-python/redis_signal_handler.py    .
+COPY --chown=app:app ./template/netwrix-python/state_manager.py           .
+COPY --chown=app:app ./template/netwrix-python/data_query.py              .
+COPY --chown=app:app ./template/netwrix-python/implicit_deleter.py        .
+
+# Copy function-specific code (handler, requirements, etc) - this overrides template defaults if present
+COPY --chown=app:app ${FUNCTION_DIR}/ .
 
 FROM build AS ship
 WORKDIR /home/app/
 
-# configure WSGI server and healthcheck
 USER app
-
-ENV fprocess="python index.py"
-ENV cgi_headers="true"
-ENV mode="http"
-ENV upstream_url="http://127.0.0.1:5000"
-
-HEALTHCHECK --interval=5s CMD [ -e /tmp/.lock ] || exit 1
-
-CMD ["fwatchdog"]

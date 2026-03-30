@@ -1,12 +1,18 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+import sys
+
+# When index.py runs as __main__, register it under the name "index" so that
+# `from index import ...` in other modules resolves to the
+# already-loaded module instead of re-executing the file.
+sys.modules.setdefault("index", sys.modules[__name__])
+
 import base64
 import json
 import logging
 import os
 import signal
-import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -15,10 +21,8 @@ from typing import Final
 
 import orjson
 import requests
-from flask import Flask, jsonify, request
 from opentelemetry import context, metrics, trace
 from opentelemetry.trace.status import StatusCode
-from waitress import serve
 
 dictConfig(
     {
@@ -29,62 +33,41 @@ dictConfig(
             }
         },
         "handlers": {
-            "wsgi": {
+            "console": {
                 "class": "logging.StreamHandler",
-                "stream": "ext://flask.logging.wsgi_errors_stream",
+                "stream": "ext://sys.stderr",
                 "formatter": "default",
             }
         },
-        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["wsgi"]},
+        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["console"]},
     }
 )
 
 SOURCE_TYPE: Final = os.getenv("SOURCE_TYPE", "internal")
 FUNCTION_TYPE: Final = os.getenv("FUNCTION_TYPE", "netwrix")
-SERVICE_NAME: Final = f"{SOURCE_TYPE}-{FUNCTION_TYPE}"
+PROCESS_KEY: Final = os.getenv("POST_PROCESSING_KEY")
+SERVICE_NAME: Final = f"{SOURCE_TYPE}-{PROCESS_KEY}" if PROCESS_KEY else f"{SOURCE_TYPE}-{FUNCTION_TYPE}"
 
 # Common functions base URL - defaults to access-analyzer namespace K8s services
 # For local development, set to appropriate docker-compose service names
 COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "access-analyzer")
 
-app = Flask(SERVICE_NAME)
 
-
-def get_service_url(service_name: str, port: int = 80, use_async: bool = False) -> str:
+def get_service_url(service_name: str, port: int = 80) -> str:
     """
     Get the URL for a common function service.
 
-    Supports three deployment modes:
-    1. Local development (RUN_LOCAL=true): uses simple service name with port 8080
-    2. Kubernetes with USE_OPENFAAS_GATEWAY=false (default): uses FQDN
-       Format: http://<service-name>.<namespace>.svc.cluster.local:<port>
-    3. OpenFaaS (USE_OPENFAAS_GATEWAY=true): uses OpenFaaS gateway
-       Format: http://<gateway>/function/<service-name> or
-               http://<gateway>/async-function/<service-name> (if use_async=True)
+    Uses Kubernetes FQDN format:
+    http://<service-name>.<namespace>.svc.cluster.local:<port>
 
     Args:
         service_name: Name of the service to call
-        port: Port number for Kubernetes FQDN (default: 80)
-        use_async: If True and using OpenFaaS, uses async-function endpoint instead of function
+        port: Port number (default: 80)
     """
-    local_run = os.getenv("RUN_LOCAL", "false") == "true"
-    use_openfaas = os.getenv("USE_OPENFAAS_GATEWAY", "false") == "true"
-
-    if local_run:
-        # Local docker-compose: service names are directly resolvable
-        return f"http://{service_name}:8080"
-
-    if use_openfaas:
-        # OpenFaaS: use gateway URL with async-function for fire-and-forget calls
-        openfaas_gateway = os.getenv("OPENFAAS_GATEWAY", "http://gateway.openfaas:8080")
-        endpoint = "async-function" if use_async else "function"
-        return f"{openfaas_gateway}/{endpoint}/{service_name}"
-
-    # Kubernetes: use fully qualified DNS name
     return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
 
 
-def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
+def setup_opentelemetry() -> Callable[[], None]:
     """
     Initialize OpenTelemetry instrumentation for traces, metrics, and logs.
 
@@ -103,7 +86,6 @@ def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.instrumentation.flask import FlaskInstrumentor
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -145,9 +127,6 @@ def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
         handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
         logging.getLogger().addHandler(handler)
 
-        if app is not None:
-            FlaskInstrumentor().instrument_app(app)
-
         RequestsInstrumentor().instrument()
 
         logging.info("OpenTelemetry initialized successfully")
@@ -179,7 +158,7 @@ def get_logger(name: str):
     return logging.getLogger(name)
 
 
-flush_opentelemetry = setup_opentelemetry(app)
+flush_opentelemetry = setup_opentelemetry()
 tracer = get_tracer(SERVICE_NAME)
 logger = get_logger(SERVICE_NAME)
 
@@ -201,52 +180,65 @@ class BatchManager:
         self.lock = threading.Lock()
 
     def add_object(self, obj: object, update_status: bool = True) -> None:
-        if obj is not None:
-            with self.lock:
-                # Add appropriate IDs and timestamp based on operation type (scan vs sync)
-                current_time = datetime.now(UTC).isoformat()
-                object_data = orjson.dumps(obj)[1:]  # Remove the first brace
+        if obj is None:
+            return
 
-                # For scan operations - ensure scan_id and scan_execution_id are set
-                scan_id = self.context.scan_id or ""
-                scan_execution_id = self.context.scan_execution_id or ""
+        # Build the enhanced object before acquiring the lock — each thread
+        # works on its own local variables, so this is safe to do in parallel.
+        current_time = datetime.now(UTC).isoformat()
+        object_data = orjson.dumps(obj)[1:]  # Remove the first brace
 
-                enhanced_object = (
-                    b"{"
-                    + b'"scan_id":"'
-                    + scan_id.encode("utf-8")
-                    + b'",'
-                    + b'"scan_execution_id":"'
-                    + scan_execution_id.encode("utf-8")
-                    + b'",'
-                    + b'"scanned_at":"'
-                    + current_time.encode("utf-8")
-                    + b'",'
-                    + object_data  # The last brace is already included in the object_data
-                )
-                size = len(enhanced_object)
+        # For scan operations - ensure scan_id and scan_execution_id are set
+        scan_id = self.context.scan_id or ""
+        scan_execution_id = self.context.scan_execution_id or ""
 
-                # Set the max size to 500 KB to accommodate for the
-                # overhead of the additional fields in the request. This is a good
-                # compromise between performance and memory usage and keeps us
-                # below the NATS payload limit.
-                if size + self.size > 500000:
-                    self._flush_internal()
+        enhanced_object = (
+            b"{"
+            + b'"scan_id":"'
+            + scan_id.encode("utf-8")
+            + b'",'
+            + b'"scan_execution_id":"'
+            + scan_execution_id.encode("utf-8")
+            + b'",'
+            + b'"scanned_at":"'
+            + current_time.encode("utf-8")
+            + b'",'
+            + object_data  # The last brace is already included in the object_data
+        )
+        size = len(enhanced_object)
 
-                self.rows += enhanced_object + b","
-                self.size += size
-                if update_status:
-                    self.increment_completed_objects += 1
+        rows_to_flush = None
+        count_to_flush = 0
 
-    def _flush_internal(self) -> tuple[bool, str | None] | None:
-        """Internal flush method - assumes lock is already held"""
-        success, error = True, None
+        # Set the max size to 500 KB to accommodate for the
+        # overhead of the additional fields in the request. This is a good
+        # compromise between performance and memory usage and keeps us
+        # below the NATS payload limit.
+        with self.lock:
+            if size + self.size > 500000:
+                # Swap out the full buffer while holding the lock (nanoseconds),
+                # then send it outside the lock so other threads are not blocked
+                # during the HTTP call.
+                rows_to_flush = self.rows
+                count_to_flush = self.increment_completed_objects
+                self.rows = b"["
+                self.size = 0
+                self.increment_completed_objects = 0
 
-        if len(self.rows) == 1:
-            return success, error
+            self.rows += enhanced_object + b","
+            self.size += size
+            if update_status:
+                self.increment_completed_objects += 1
+
+        if rows_to_flush is not None:
+            self._send(rows_to_flush, count_to_flush)
+
+    def _send(self, rows: bytes, count: int) -> None:
+        """Send a captured buffer snapshot. Must be called outside the lock."""
+        if len(rows) == 1:  # just b"[" — nothing to send
+            return
 
         try:
-            self.rows = self.rows[:-1] + b"]"  # Remove the last comma and add a closing bracket
             payload = (
                 b"{"
                 + b'"sourceType":"'
@@ -256,16 +248,16 @@ class BatchManager:
                 + self.table_name.encode("utf-8")
                 + b'",'
                 + b'"data":'
-                + self.rows
-                + b"}"
+                + rows[:-1]  # strip trailing comma
+                + b"]}"
             )
 
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.context.get_caller_headers()}
 
-            # Get service URL for data-ingestion (use async for OpenFaaS fire-and-forget)
+            # Get service URL for data-ingestion
             service_name = os.getenv("SAVE_DATA_FUNCTION", "data-ingestion")
-            url = get_service_url(service_name, use_async=True)
+            url = get_service_url(service_name)
 
             response = requests.post(
                 url,
@@ -275,50 +267,36 @@ class BatchManager:
             )
 
             if response.status_code in (202, 200):
-                if self.increment_completed_objects > 0:
+                if count > 0:
                     self.context.update_execution(
-                        increment_completed_objects=self.increment_completed_objects,
+                        increment_completed_objects=count,
                     )
             else:
                 error_msg = f"Status {response.status_code}: {response.text}"
                 self.context.log.error(error_msg)
-                success = False
-                error = error_msg
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             self.context.log.error(error_msg, error_type=type(e).__name__)
-            success = False
-            error = error_msg
 
-        self.size = 0
-        self.increment_completed_objects = 0
-        self.rows = b"["  # Reset the rows to a new array
-
-        return success, error
-
-    def flush(self) -> tuple[bool, str | None] | None:
-        """Public flush method - acquires lock before flushing"""
+    def flush(self) -> None:
+        """Flush any remaining buffered rows. Called once at end of scan/sync."""
         with self.lock:
-            return self._flush_internal()
+            rows, count = self.rows, self.increment_completed_objects
+            self.rows = b"["
+            self.size = 0
+            self.increment_completed_objects = 0
+        # Send outside the lock — same pattern as add_object
+        self._send(rows, count)
 
 
 class Event:
-    def __init__(self, execution_mode: str = "http"):
-        if execution_mode == "http":
-            # HTTP mode: read from Flask request
-            self.body = request.get_data()
-            self.headers = request.headers
-            self.method = request.method
-            self.query = request.args
-            self.path = request.path
-        else:
-            # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
-            request_data = os.getenv("REQUEST_DATA", "{}")
-            self.body = request_data.encode()
-            self.headers = {}
-            self.method = "POST"
-            self.query = {}
-            self.path = "/"
+    def __init__(self):
+        request_data = os.getenv("REQUEST_DATA", "{}")
+        self.body = request_data.encode()
+        self.headers = {}
+        self.method = "POST"
+        self.query = {}
+        self.path = "/"
 
 
 class Context:
@@ -326,11 +304,16 @@ class Context:
         self.secrets: dict[str, str] | None = None
         self.scan_id: str | None = os.getenv("SCAN_ID")
         self.scan_execution_id: str | None = None
+        self.parent_execution_id: str | None = None
         self.run_local: str = os.getenv("RUN_LOCAL", "false")
         self.function_type: str | None = os.getenv("FUNCTION_TYPE")
         self.tables: dict[str, BatchManager] = {}
 
         self.log = ContextLogger(self)
+
+    @property
+    def source_type(self) -> str:
+        return SOURCE_TYPE
 
     def test_connection_success_response(self):
         return {"statusCode": 200, "body": {}}
@@ -534,6 +517,45 @@ class Context:
         # Create thread with wrapped target
         return threading.Thread(*args, target=wrapped_target, **kwargs)
 
+    def run_process_async(self, process_key: str) -> None:
+        """
+        Trigger an additional process asynchronously as a new child of the parent execution.
+
+        This allows a handler to kick off other named processes defined in the connector's
+        config.json `additionalProcesses` array. The new child execution runs under the same
+        parent, so it participates in the same lifecycle (its completion is tracked and the
+        parent only completes when all children are done).
+
+        Args:
+            process_key: The key of the additional process to trigger (must match the handler
+                         directory name and the `key` field in `additionalProcesses`).
+
+        Raises:
+            ValueError: If parent_execution_id is not set on the context.
+            requests.HTTPError: If the core-api call fails.
+        """
+        if not self.parent_execution_id:
+            raise ValueError("parent_execution_id must be set to call run_process_async")
+
+        base_url = os.getenv("CORE_API_INTERNAL_URL", "http://core-api:3000")
+        url = f"{base_url}/api/v1/scan-executions/{self.parent_execution_id}/run-process"
+
+        headers = {"Content-Type": "application/json"}
+        api_key = os.getenv("CONNECTOR_API_KEY", "")
+        if api_key:
+            headers["X-Api-Key"] = api_key
+
+        response = requests.post(
+            url,
+            json={"processKey": process_key},
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        self.log.info("Triggered additional process", process_key=process_key, execution_id=result.get("executionId"))
+
     # Add an object to the appropriate table batch manager
     def save_object(self, table: str, obj: object, update_status: bool = True):
         if table not in self.tables:
@@ -576,12 +598,12 @@ class Context:
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
             # Log the update request details
-            self.log.info(f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}")
+            self.log.debug(f"Calling update_execution: id={self.scan_execution_id}, status={status}, payload={payload}")
 
             # Get service URL for app-update-execution
             service_name = os.getenv("APP_UPDATE_EXECUTION_FUNCTION", "app-update-execution")
             url = get_service_url(service_name)
-            self.log.info(f"Sending update_execution to URL: {url}")
+            self.log.debug(f"Sending update_execution to URL: {url}")
 
             response = requests.post(
                 url,
@@ -591,7 +613,7 @@ class Context:
             )
 
             if response.status_code in (202, 200):
-                self.log.info(
+                self.log.debug(
                     f"update_execution succeeded: status_code={response.status_code}, response={response.text[:200] if response.text else ''}"
                 )
                 return True, None
@@ -615,8 +637,6 @@ class Context:
         Returns:
             dict with 'status' field if found, None if not found or on error
         """
-        local_run = self.run_local == "true"
-
         try:
             # Query Postgres for scan execution status via app-data-query function
             query = (
@@ -627,24 +647,16 @@ class Context:
             # Build headers with caller context information
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
-            if local_run:
-                url = f"http://{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}:8080"
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-            else:
-                url = (
-                    f"{os.getenv('OPENFAAS_GATEWAY')}/function/{os.getenv('APP_DATA_QUERY_FUNCTION', 'app-data-query')}"
-                )
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
+            # Get service URL for app-data-query using standard routing
+            service_name = os.getenv("APP_DATA_QUERY_FUNCTION", "app-data-query")
+            url = get_service_url(service_name)
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -727,17 +739,14 @@ class ContextLogger:
         self.log(logging.DEBUG, message, **attributes)
 
 
-def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
-    """Read secrets from available mount paths.
+def get_secrets(context: Context) -> dict[str, str]:
+    """Read secrets from /var/secrets/.
 
-    Supports both OpenFaaS (/var/openfaas/secrets/) and connector-api (/var/secrets/) paths.
-    Both use the same flat file structure: <base-path>/<secret-name> containing the raw value.
+    Uses flat file structure: /var/secrets/<secret-name> containing the raw value.
     """
     secrets_dict: dict[str, str] = {}
 
-    # Both paths use flat file structure (not directories)
-    connector_api_path = "/var/secrets/"
-    openfaas_path = "/var/openfaas/secrets/"
+    secrets_path = "/var/secrets/"
 
     secret_mappings = os.getenv("SECRET_MAPPINGS", "").split(",")
     secret_mappings_dict = {
@@ -747,8 +756,7 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     for key, secret_name in secret_mappings_dict.items():
         secret_value = None
 
-        # Try connector-api path first: /var/secrets/<secret-name>
-        secret_file_path = os.path.join(connector_api_path, secret_name)
+        secret_file_path = os.path.join(secrets_path, secret_name)
         if os.path.isfile(secret_file_path):
             try:
                 with open(secret_file_path) as f:
@@ -761,21 +769,6 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
                     error_type=type(e).__name__,
                 )
 
-        # Fallback to OpenFaaS path: /var/openfaas/secrets/<secret-name>
-        if secret_value is None:
-            secret_file_path = os.path.join(openfaas_path, secret_name)
-            if os.path.isfile(secret_file_path):
-                try:
-                    with open(secret_file_path) as f:
-                        secret_value = f.read().strip()
-                except Exception as e:
-                    context.log.error(
-                        "Error reading secret file",
-                        filename=secret_file_path,
-                        error=str(e),
-                        error_type=type(e).__name__,
-                    )
-
         if secret_value is not None:
             secrets_dict[key] = secret_value
             context.log.info("Loaded secret", secret_key=key)
@@ -785,187 +778,12 @@ def get_secrets(context: Context, local_run: bool = False) -> dict[str, str]:
     return secrets_dict
 
 
-def format_status_code(resp):
-    if "statusCode" in resp:
-        return resp["statusCode"]
-
-    return 200
-
-
-def format_body(resp):
-    if "body" not in resp:
-        return ""
-    if type(resp["body"]) is dict:
-        return jsonify(resp["body"])
-    return str(resp["body"])
-
-
-def format_headers(resp):
-    if "headers" not in resp:
-        return []
-    if type(resp["headers"]) is dict:
-        headers = []
-        for key in resp["headers"]:
-            header_tuple = (key, resp["headers"][key])
-            headers.append(header_tuple)
-        return headers
-
-    return resp["headers"]
-
-
-def format_response(resp):
-    if resp is None:
-        return ("", 200)
-
-    if type(resp) is dict:
-        status_code = format_status_code(resp)
-        body = format_body(resp)
-        headers = format_headers(resp)
-
-        return (body, status_code, headers)
-
-    return resp
-
-
-@app.get("/health")
-def health():
-    return jsonify(status="ok")
-
-
-@app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
-@app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
-def call_handler(path: str):
-    with tracer.start_as_current_span("process_request") as span:
-        event = Event()
-        context = Context()
-
-        context.log.info(
-            "Received request",
-            http_method=event.method,
-            http_path=event.path,
-            http_query=dict(event.query),
-        )
-
-        try:
-            local_run = context.run_local == "true"
-
-            # Load secrets from secret files
-            context.secrets = get_secrets(context, local_run)
-
-            request_data = json.loads(event.body)
-            context.scan_execution_id = request_data.get("scanExecutionId")
-
-            if not context.secrets:
-                context.log.warning("No secrets loaded from secret files")
-            else:
-                context.log.info(
-                    "Loaded secrets from secret files",
-                    secret_count=len(context.secrets),
-                )
-
-            started_at = datetime.now(UTC).isoformat()
-
-            if context.function_type == "access-scan" or context.function_type == "sync":
-                context.update_execution(status="running")
-                context.log.info("Started operation", function_type=context.function_type)
-
-            with tracer.start_as_current_span("handle_request"):
-                response_data = handler.handle(event, context)
-
-            # Flush remaining rows in all tables
-            context.flush_tables()
-
-            completed_at = datetime.now(UTC).isoformat()
-            if context.function_type == "test-connection" and response_data["statusCode"] == 200:
-                response_data["body"]["startedAt"] = started_at
-                response_data["body"]["completedAt"] = completed_at
-            elif context.function_type == "access-scan" or context.function_type == "sync":
-                if response_data["statusCode"] == 200:
-                    response_data["body"]["startedAt"] = started_at
-                    response_data["body"]["completedAt"] = completed_at
-                    # Check if handler already set a specific status (like 'stopped' or 'paused')
-                    # If not, default to 'completed'
-                    response_status = response_data.get("body", {}).get("status")
-                    if response_status == "stopped":
-                        # Scan was stopped, make sure execution status is updated
-                        context.update_execution(status="stopped", completed_at=completed_at)
-                        context.log.info(
-                            "Scan was stopped",
-                            function_type=context.function_type,
-                            status="stopped",
-                        )
-                    elif response_status == "paused":
-                        # Scan was paused, make sure execution status is updated
-                        context.update_execution(status="paused")
-                        context.log.info(
-                            "Scan was paused",
-                            function_type=context.function_type,
-                            status="paused",
-                        )
-                    else:
-                        # Normal completion - update to completed
-                        context.update_execution(status="completed", completed_at=completed_at)
-                        context.log.info(
-                            f"Completed {context.function_type} operation successfully",
-                            function_type=context.function_type,
-                            status="completed",
-                        )
-                else:
-                    context.update_execution(status="failed", completed_at=completed_at)
-                    context.log.error(
-                        f"Failed {context.function_type} operation",
-                        function_type=context.function_type,
-                        status="failed",
-                        status_code=response_data["statusCode"],
-                    )
-
-            with tracer.start_as_current_span("format_response"):
-                resp = format_response(response_data)
-
-            status_code = 200
-            if isinstance(resp, tuple) and len(resp) >= 2:
-                status_code = resp[1]
-            span.set_attribute("http.status_code", status_code)
-            span.set_status(StatusCode.OK)
-            context.log.info("Request completed", http_status_code=status_code)
-
-            return resp
-        except Exception as e:
-            span.set_attribute("http.status_code", 500)
-            span.record_exception(e)
-            span.set_status(StatusCode.ERROR)
-            context.log.error(
-                "Request failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            raise
-
-
 def handle_shutdown(signum, frame):
     flush_opentelemetry()
 
 
 signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
-
-
-def get_execution_mode() -> str:
-    """Detect execution mode based on environment.
-
-    Returns:
-        str: 'job' for Kubernetes job mode, 'http' for HTTP server mode
-    """
-    # Explicit mode override
-    if os.getenv("EXECUTION_MODE") == "job":
-        return "job"
-
-    # If REQUEST_DATA is set, assume job mode
-    if os.getenv("REQUEST_DATA"):
-        return "job"
-
-    # Default to HTTP server mode
-    return "http"
 
 
 def run_as_job():
@@ -985,6 +803,7 @@ def run_as_job():
             request_data = {}
 
         ctx.scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
+        ctx.parent_execution_id = request_data.get("parentExecutionId") or None
 
         ctx.log.info(
             "Starting job execution",
@@ -994,7 +813,7 @@ def run_as_job():
             scan_execution_id=ctx.scan_execution_id,
         )
 
-        event = Event(execution_mode="job")
+        event = Event()
 
         try:
             # Update execution status to running for scan/sync operations
@@ -1093,22 +912,9 @@ def run_as_job():
         sys.exit(0 if result["success"] else 1)
 
 
-def run_as_http_server():
-    """Start Flask HTTP server for OpenFaaS mode."""
-    port = os.getenv("PORT", 5000)
-    serve(app, host="0.0.0.0", port=port)
-
-
 def main():
-    """Main entry point - detect execution mode and run accordingly."""
-    execution_mode = get_execution_mode()
-
-    if execution_mode == "job":
-        # Job mode: run handler once and exit
-        run_as_job()
-    else:
-        # HTTP mode: start Flask server
-        run_as_http_server()
+    """Main entry point."""
+    run_as_job()
 
 
 if __name__ == "__main__":

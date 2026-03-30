@@ -4,7 +4,7 @@ FROM --platform=${TARGETPLATFORM:-linux/amd64} python:${PYTHON_VERSION}-alpine A
 ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
 ARG DEBUG_MODE="false"
-ARG SERVICE_NAME
+ARG FUNCTION_DIR
 
 RUN --mount=type=cache,target=/var/cache/apk \
     if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk upgrade; fi && \
@@ -13,12 +13,6 @@ RUN --mount=type=cache,target=/var/cache/apk \
 # Add non root user
 RUN addgroup -S app && adduser app -S -G app
 RUN chown app /home/app
-
-# Create /app/run entrypoint for connector-api job mode
-# This allows the connector-api to invoke the handler directly without Flask
-RUN mkdir -p /app && \
-    printf '#!/bin/sh\nexec python /home/app/index.py\n' > /app/run && \
-    chmod +x /app/run
 
 USER app
 
@@ -35,16 +29,16 @@ ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
 
 # Template specific steps
 WORKDIR /home/app/
-COPY --chown=app:app index.py           .
-COPY --chown=app:app pyproject.toml     .
-COPY --chown=app:app uv.lock            .
+COPY --chown=app:app ./template/netwrix-internal-python/index.py           .
+COPY --chown=app:app ./template/netwrix-internal-python/pyproject.toml     .
+COPY --chown=app:app ./template/netwrix-internal-python/uv.lock            .
 USER root
 RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
     uv export --no-dev --format requirements-txt -o requirements.txt && \
     touch requirements-dev.txt; \
     if [ "$DEBUG_MODE" = "true" ]; then \
-      uv export --only-dev --format requirements-txt -o requirements-dev.txt; \
+    uv export --only-dev --format requirements-txt -o requirements-dev.txt; \
     fi
 
 # Build the function directory and install any user-specified components
@@ -53,7 +47,7 @@ USER app
 RUN mkdir -p function
 RUN touch ./function/__init__.py
 WORKDIR /home/app/function/
-COPY --chown=app:app function/requirements.txt  .
+COPY --chown=app:app ${FUNCTION_DIR}/requirements.txt  .
 
 # install function code
 USER root
@@ -61,7 +55,10 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
     --mount=type=cache,target=/var/cache/uv/ \
     uv pip install --system -r ../requirements.txt -r ../requirements-dev.txt -r requirements.txt
 
-COPY --chown=app:app function/   .
+# Copy template-provided function files (state_manager, redis_signal_handler, etc)
+COPY --chown=app:app ./template/netwrix-internal-python/function/ .
+
+COPY --chown=app:app ${FUNCTION_DIR}/ .
 
 FROM build AS ship
 WORKDIR /home/app/
