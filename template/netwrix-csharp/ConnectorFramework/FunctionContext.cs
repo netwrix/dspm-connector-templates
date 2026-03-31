@@ -94,7 +94,7 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
         }
 
         // Apply SECRET_MAPPINGS aliases: "appKey1:secretFile1,appKey2:secretFile2"
-        var mappings = Environment.GetEnvironmentVariable("SECRET_MAPPINGS") ?? "";
+        var mappings = Environment.GetEnvironmentVariable(EnvironmentVariables.SecretMappings) ?? "";
         foreach (var mapping in mappings.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
             var parts = mapping.Split(':', 2);
@@ -245,11 +245,11 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
             payload["incrementCompletedObjects"] = incrementCompletedObjects;
         }
 
-        var serviceUrl = ServiceUrlHelper.Resolve("APP_UPDATE_EXECUTION_FUNCTION", "app-update-execution");
+        var serviceUrl = ServiceUrlHelper.Resolve(EnvironmentVariables.AppUpdateExecutionFunction, ServiceNames.AppUpdateExecution);
 
         try
         {
-            using var client = _httpClientFactory.CreateClient("update-execution");
+            using var client = _httpClientFactory.CreateClient(ServiceNames.UpdateExecution);
             using var request = new HttpRequestMessage(HttpMethod.Post, serviceUrl)
             {
                 Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json"),
@@ -388,13 +388,13 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
             return null;
         }
 
-        var serviceUrl = ServiceUrlHelper.Resolve("APP_DATA_QUERY_FUNCTION", "app-data-query");
+        var serviceUrl = ServiceUrlHelper.Resolve(EnvironmentVariables.AppDataQueryFunction, ServiceNames.AppDataQuery);
         var query = $"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{parsedId}' LIMIT 1";
         var payload = new { query };
 
         try
         {
-            using var client = _httpClientFactory.CreateClient("app-data-query");
+            using var client = _httpClientFactory.CreateClient(ServiceNames.AppDataQuery);
             using var request = new HttpRequestMessage(HttpMethod.Post, serviceUrl)
             {
                 Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json"),

@@ -140,7 +140,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Unable to perform regular task update for task {TaskReference}", taskReference);
+            _logger.LogError(ex, "Unable to perform regular task update for task {TaskReference}", taskReference);
         }
         finally
         {

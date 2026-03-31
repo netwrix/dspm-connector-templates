@@ -25,6 +25,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ConnectorFramework\ConnectorFramework.csproj" />
+    <!-- Sdk.Core/Cloud are PrivateAssets in ConnectorFramework; add directly so tests can compile -->
+    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.12-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.12-preview" />
   </ItemGroup>
 
 </Project>

@@ -22,8 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.12-preview" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.12-preview" />
+    <!-- PrivateAssets="all" prevents these from flowing up to consumers that may use a different
+         (e.g. project-built) version of these SDKs, avoiding assembly version conflicts. -->
+    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.12-preview" PrivateAssets="all" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.12-preview" PrivateAssets="all" />
     <PackageReference Include="Netwrix.UK.Core" Version="5.2.2.1" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.*" />
     <PackageReference Include="OpenTelemetry" Version="1.9.*" />
