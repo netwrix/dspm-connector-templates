@@ -87,7 +87,7 @@ public class AACrawlTaskCorePlatformFacadeTests
         await facade.EnsureRegularTaskProgressUpdate(Guid.NewGuid(), new CrawlResponse { ProcessedItemCount = 10 });
 
         progressMock.Verify(p => p.UpdateExecutionAsync(
-            "running",
+            ScanStatus.Running,
             null,
             null,
             null,
@@ -110,7 +110,7 @@ public class AACrawlTaskCorePlatformFacadeTests
         await facade.EnsureRegularTaskProgressUpdate(taskId, new CrawlResponse { ProcessedItemCount = 15 });
 
         progressMock.Verify(p => p.UpdateExecutionAsync(
-            "running",
+            ScanStatus.Running,
             null,
             null,
             null,
@@ -129,7 +129,7 @@ public class AACrawlTaskCorePlatformFacadeTests
         await facade.FinalizeScan();
 
         progressMock.Verify(p => p.UpdateExecutionAsync(
-            "completed",
+            ScanStatus.Completed,
             null,
             null,
             null,
@@ -151,7 +151,7 @@ public class AACrawlTaskCorePlatformFacadeTests
 
         // delta = 20 - 0 (reportedItemsCount) = 20
         progressMock.Verify(p => p.UpdateExecutionAsync(
-            "completed",
+            ScanStatus.Completed,
             null,
             null,
             null,
