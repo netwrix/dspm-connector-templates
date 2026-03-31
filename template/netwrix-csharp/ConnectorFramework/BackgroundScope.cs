@@ -1,5 +1,3 @@
-using Microsoft.Extensions.DependencyInjection;
-
 namespace Netwrix.ConnectorFramework;
 
 /// <summary>
@@ -20,8 +18,11 @@ internal sealed class RequestDataHolder
         set
         {
             if (_data is not null)
+            {
                 throw new InvalidOperationException(
                     "RequestDataHolder.Data may only be set once per scope.");
+            }
+
             _data = value;
         }
     }

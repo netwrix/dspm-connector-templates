@@ -32,8 +32,9 @@ public class Handler : IConnectorHandler
     ///
     /// TODO: add connector-specific services after this block (e.g. SharePoint graph client, options).
     /// </summary>
-    public void MapServices(IServiceCollection services)
+    public void MapServices(IServiceCollection services, IConfiguration configuration)
     {
+        services.AddScoped<AACorePlatformFacade>();
         services.AddScoped<AACrawlTaskCorePlatformFacade>();
         services.AddScoped<ICrawlTaskManagementPlatformFacade>(
             sp => sp.GetRequiredService<AACrawlTaskCorePlatformFacade>());
@@ -103,8 +104,7 @@ public class Handler : IConnectorHandler
     //     StateManager stateManager,
     //     CancellationToken ct)
     // {
-    //     var executionId = ctx.ScanExecutionId ?? throw new InvalidOperationException("ScanExecutionId is required");
-    //     await stateManager.SetStateAsync("running", ct);
+    //     var executionId = ctx.Execution.ScanExecutionId ?? throw new InvalidOperationException("ScanExecutionId is required");
     //
     //     try
     //     {
@@ -113,7 +113,11 @@ public class Handler : IConnectorHandler
     //
     //         foreach (var item in GetItems())
     //         {
-    //             if (await stateManager.ShouldStopAsync(executionId, ct)) break;
+    //             if (await stateManager.ShouldStopAsync(executionId, ct))
+    //             {
+    //                 await stateManager.ShutdownAsync(executionId, "stopped", ct);
+    //                 return;
+    //             }
     //             if (await stateManager.ShouldPauseAsync(executionId, ct))
     //             {
     //                 await ctx.SetConnectorStateAsync(new { lastProcessed = item.Id }, ct);
@@ -122,7 +126,6 @@ public class Handler : IConnectorHandler
     //             }
     //
     //             table.AddObject(item);
-    //             await ctx.UpdateExecutionAsync(incrementCompletedObjects: 1, ct: ct);
     //         }
     //
     //         await ctx.FlushTablesAsync(ct);

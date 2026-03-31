@@ -16,7 +16,7 @@ internal static class ServiceUrlHelper
     public static string Resolve(string envVarOverride, string defaultServiceName, int port = 80, bool useAsync = false)
     {
         var overrideUrl = Environment.GetEnvironmentVariable(envVarOverride);
-        if (!string.IsNullOrEmpty(overrideUrl))
+        if (!string.IsNullOrEmpty(overrideUrl) && Uri.IsWellFormedUriString(overrideUrl, UriKind.Absolute))
         {
             return overrideUrl;
         }

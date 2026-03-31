@@ -8,23 +8,24 @@ public sealed class StateManager : IAsyncDisposable
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> ValidTransitions =
         new Dictionary<string, IReadOnlyList<string>>
         {
-            ["running"] = ["stopping", "pausing", "completed", "failed"],
-            ["stopping"] = ["stopped", "failed"],
-            ["stopped"] = [],
-            ["pausing"] = ["paused", "failed"],
-            ["paused"] = ["resuming", "failed", "stopped"],
-            ["resuming"] = ["running", "failed"],
-            ["completed"] = [],
-            ["failed"] = [],
+            [ScanStatus.Running] = [ScanStatus.Stopping, ScanStatus.Pausing, ScanStatus.Completed, ScanStatus.Failed],
+            [ScanStatus.Stopping] = [ScanStatus.Stopped, ScanStatus.Failed],
+            [ScanStatus.Stopped] = [],
+            [ScanStatus.Pausing] = [ScanStatus.Paused, ScanStatus.Failed],
+            [ScanStatus.Paused] = [ScanStatus.Resuming, ScanStatus.Failed, ScanStatus.Stopped],
+            [ScanStatus.Resuming] = [ScanStatus.Running, ScanStatus.Failed],
+            [ScanStatus.Completed] = [],
+            [ScanStatus.Failed] = [],
         };
 
     private readonly RedisSignalHandler _redis;
     private readonly ScanShutdownService _shutdown;
+    private readonly IScanProgress _progress;
     private readonly ILogger<StateManager> _logger;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private readonly List<Func<string, string, Task>> _callbacks = [];
 
-    private volatile string _currentState = "running";
+    private volatile string _currentState = ScanStatus.Running;
     private string? _requestedState;
     private DateTimeOffset _lastSignalCheck = DateTimeOffset.MinValue;
 
@@ -41,12 +42,14 @@ public sealed class StateManager : IAsyncDisposable
     public StateManager(
         RedisSignalHandler redis,
         ScanShutdownService shutdown,
+        IScanProgress progress,
         ILogger<StateManager> logger,
         SupportedStates? supportedStates = null,
         int signalCheckIntervalSeconds = 5)
     {
         _redis = redis;
         _shutdown = shutdown;
+        _progress = progress;
         _logger = logger;
         SupportedStates = supportedStates ?? new SupportedStates();
         SignalCheckIntervalSeconds = signalCheckIntervalSeconds;
@@ -208,7 +211,7 @@ public sealed class StateManager : IAsyncDisposable
     /// </summary>
     public async Task<bool> ShutdownAsync(
         string executionId,
-        string finalStatus = "stopped",
+        string finalStatus = ScanStatus.Stopped,
         CancellationToken ct = default)
     {
         try
@@ -219,11 +222,16 @@ public sealed class StateManager : IAsyncDisposable
                 return false;
             }
 
+            await _progress.UpdateExecutionAsync(
+                status: finalStatus,
+                completedAt: finalStatus != ScanStatus.Paused ? DateTimeOffset.UtcNow : null,
+                ct: ct);
+
             await _redis.UpdateStatusAsync(
                 executionId,
                 finalStatus,
                 "Execution stopped",
-                partialData: finalStatus == "stopped",
+                partialData: finalStatus == ScanStatus.Stopped,
                 ct: ct);
 
             await _redis.CleanupStreamsAsync(executionId, ct);
