@@ -93,13 +93,6 @@ public sealed class ConnectorStateStorage : IStateStorage
             return false;
         }
 
-        var allState = await FetchAllStateAsync(cancellationToken);
-
-        if (!allState.ContainsKey(key))
-        {
-            return false;
-        }
-
         await DeleteStateAsync(new[] { key }, cancellationToken);
         return true;
     }

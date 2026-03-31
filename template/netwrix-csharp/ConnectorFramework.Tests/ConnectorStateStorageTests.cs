@@ -183,40 +183,17 @@ public class ConnectorStateStorageTests
     // ── DeleteAsync ───────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task DeleteAsync_ReturnsFalse_WhenKeyAbsent()
+    public async Task DeleteAsync_ReturnsTrueAndIssuesDelete()
     {
-        var (_, factory) = CreateFactory(EmptyStateResponse());
-        var storage = CreateStorage(factory);
-
-        var deleted = await storage.DeleteAsync("ghost");
-
-        Assert.False(deleted);
-    }
-
-    [Fact]
-    public async Task DeleteAsync_ReturnsTrueAndIssuesDelete_WhenKeyPresent()
-    {
-        var stateData = new Dictionary<string, string>
-        {
-            ["target"] = "\"data\"",
-        };
         HttpMethod? deleteMethod = null;
         string? deleteUrl = null;
         var handlerMock = new Mock<HttpMessageHandler>();
-        var callIndex = 0;
         handlerMock.Protected()
             .Setup<Task<HttpResponseMessage>>("SendAsync",
                 ItExpr.IsAny<HttpRequestMessage>(),
                 ItExpr.IsAny<CancellationToken>())
             .Returns<HttpRequestMessage, CancellationToken>((req, _) =>
             {
-                if (callIndex++ == 0)
-                {
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
-                    });
-                }
                 deleteMethod = req.Method;
                 deleteUrl = req.RequestUri!.ToString();
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
