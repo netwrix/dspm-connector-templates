@@ -16,6 +16,9 @@ internal static class Program
 {
     private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
 
+    private static string SanitizeForLog(string? value) =>
+        (value ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+
     public static async Task<int> Main(string[] args)
     {
         return IsJobMode()
@@ -63,7 +66,7 @@ internal static class Program
             using var activity = ActivitySource.StartActivity("process_request");
             requestLogger.LogInformation(
                 "Received request {Method} {Path}",
-                ctx.Request.Method, ctx.Request.Path.Value);
+                SanitizeForLog(ctx.Request.Method), SanitizeForLog(ctx.Request.Path.Value));
             try
             {
                 await next(ctx);
@@ -78,7 +81,7 @@ internal static class Program
                 activity?.RecordException(ex);
                 requestLogger.LogError(ex,
                     "Request failed {Method} {Path}",
-                    ctx.Request.Method, ctx.Request.Path.Value);
+                    SanitizeForLog(ctx.Request.Method), SanitizeForLog(ctx.Request.Path.Value));
                 throw;
             }
         });
