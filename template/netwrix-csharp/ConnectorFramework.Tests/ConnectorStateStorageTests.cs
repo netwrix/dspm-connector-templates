@@ -47,31 +47,6 @@ public class ConnectorStateStorageTests
         return (handlerMock, factoryMock.Object);
     }
 
-    /// <summary>Returns a factory that replies with sequentially different responses per call.</summary>
-    private static (Mock<HttpMessageHandler> Handler, IHttpClientFactory Factory) CreateSequentialFactory(
-        params (string Body, HttpStatusCode Code)[] responses)
-    {
-        var handlerMock = new Mock<HttpMessageHandler>();
-        var callIndex = 0;
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .Returns<HttpRequestMessage, CancellationToken>((_, _) =>
-            {
-                var (body, code) = responses[callIndex++];
-                return Task.FromResult(new HttpResponseMessage(code)
-                {
-                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
-                });
-            });
-
-        var factoryMock = new Mock<IHttpClientFactory>();
-        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>()))
-            .Returns(() => new HttpClient(handlerMock.Object));
-        return (handlerMock, factoryMock.Object);
-    }
-
     private static string StateResponse(Dictionary<string, string> data)
         => JsonSerializer.Serialize(new { success = true, data });
 
@@ -95,12 +70,11 @@ public class ConnectorStateStorageTests
     }
 
     [Fact]
-    public async Task TryGetAsync_ReturnsValueAndEtag_WhenFound()
+    public async Task TryGetAsync_ReturnsValue_WhenFound()
     {
         var stateData = new Dictionary<string, string>
         {
             ["myKey"] = "\"hello\"",
-            ["__etag__:myKey"] = "etag-abc",
         };
         var (_, factory) = CreateFactory(StateResponse(stateData));
         var storage = CreateStorage(factory);
@@ -109,7 +83,7 @@ public class ConnectorStateStorageTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal("hello", result.Value);
-        Assert.Equal("etag-abc", result.ETag);
+        Assert.Null(result.ETag);
     }
 
     [Fact]
@@ -136,7 +110,7 @@ public class ConnectorStateStorageTests
     // ── SetAsync ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task SetAsync_PostsValueAndEtagCompanion()
+    public async Task SetAsync_PostsValue()
     {
         byte[]? capturedBody = null;
         var handlerMock = new Mock<HttpMessageHandler>();
@@ -161,7 +135,7 @@ public class ConnectorStateStorageTests
         var json = Encoding.UTF8.GetString(capturedBody!);
         Assert.Contains("\"cursor\"", json);
         Assert.Contains("page-5", json);
-        Assert.Contains("__etag__:cursor", json);
+        Assert.DoesNotContain("__etag__", json);
     }
 
     [Fact]
@@ -178,53 +152,32 @@ public class ConnectorStateStorageTests
     // ── SetIfMatchAsync ───────────────────────────────────────────────────────
 
     [Fact]
-    public async Task SetIfMatchAsync_Succeeds_AndReturnsNewEtag_WhenEtagMatches()
+    public async Task SetIfMatchAsync_WritesValueUnconditionally()
     {
-        var stateData = new Dictionary<string, string>
-        {
-            ["bookmark"] = "\"value-old\"",
-            ["__etag__:bookmark"] = "etag-1",
-        };
-        var (_, factory) = CreateSequentialFactory(
-            (StateResponse(stateData), HttpStatusCode.OK),  // GET
-            (OkResponse(), HttpStatusCode.OK));             // POST
+        byte[]? capturedBody = null;
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Callback<HttpRequestMessage, CancellationToken>(async (req, _) =>
+            {
+                capturedBody = await req.Content!.ReadAsByteArrayAsync();
+            })
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK));
 
-        var storage = CreateStorage(factory);
+        var factoryMock = new Mock<IHttpClientFactory>();
+        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>()))
+            .Returns(() => new HttpClient(handlerMock.Object));
+        var storage = CreateStorage(factoryMock.Object);
 
-        var newEtag = await storage.SetIfMatchAsync("bookmark", "value-new", "etag-1");
+        var result = await storage.SetIfMatchAsync("bookmark", "value-new", "any-etag");
 
-        Assert.NotNull(newEtag);
-        Assert.NotEqual("etag-1", newEtag);
-    }
-
-    [Fact]
-    public async Task SetIfMatchAsync_ThrowsStateChangedException_WhenEtagMismatch()
-    {
-        var stateData = new Dictionary<string, string>
-        {
-            ["bookmark"] = "\"value-old\"",
-            ["__etag__:bookmark"] = "etag-current",
-        };
-        var (_, factory) = CreateFactory(StateResponse(stateData));
-        var storage = CreateStorage(factory);
-
-        await Assert.ThrowsAsync<StateChangedException>(() =>
-            storage.SetIfMatchAsync("bookmark", "value-new", "etag-stale"));
-    }
-
-    [Fact]
-    public async Task SetIfMatchAsync_ThrowsStateChangedException_WhenKeyExistsButNullExpectedEtag()
-    {
-        var stateData = new Dictionary<string, string>
-        {
-            ["existing"] = "\"already-here\"",
-            ["__etag__:existing"] = "etag-xyz",
-        };
-        var (_, factory) = CreateFactory(StateResponse(stateData));
-        var storage = CreateStorage(factory);
-
-        await Assert.ThrowsAsync<StateChangedException>(() =>
-            storage.SetIfMatchAsync("existing", "new-value", expectedETag: null));
+        Assert.NotNull(capturedBody);
+        var json = Encoding.UTF8.GetString(capturedBody!);
+        Assert.Contains("\"bookmark\"", json);
+        Assert.Contains("value-new", json);
+        Assert.Equal(string.Empty, result);
     }
 
     // ── DeleteAsync ───────────────────────────────────────────────────────────
@@ -246,7 +199,6 @@ public class ConnectorStateStorageTests
         var stateData = new Dictionary<string, string>
         {
             ["target"] = "\"data\"",
-            ["__etag__:target"] = "etag-t",
         };
         HttpMethod? deleteMethod = null;
         string? deleteUrl = null;
@@ -291,9 +243,7 @@ public class ConnectorStateStorageTests
         var stateData = new Dictionary<string, string>
         {
             ["source/abc/bookmark"] = "\"v1\"",
-            ["__etag__:source/abc/bookmark"] = "e1",
             ["source/abc/cursor"] = "\"v2\"",
-            ["__etag__:source/abc/cursor"] = "e2",
             ["other/key"] = "\"v3\"",
         };
         string? deleteUrl = null;
@@ -333,14 +283,12 @@ public class ConnectorStateStorageTests
     // ── ListAllKeysAsync ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ListAllKeysAsync_ReturnsKeys_ExcludingEtagCompanions()
+    public async Task ListAllKeysAsync_ReturnsKeys_MatchingPrefix()
     {
         var stateData = new Dictionary<string, string>
         {
             ["a/x"] = "\"1\"",
-            ["__etag__:a/x"] = "e1",
             ["a/y"] = "\"2\"",
-            ["__etag__:a/y"] = "e2",
             ["b/z"] = "\"3\"",
         };
         var (_, factory) = CreateFactory(StateResponse(stateData));

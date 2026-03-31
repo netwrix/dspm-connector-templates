@@ -3,21 +3,14 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Netwrix.Overlord.Sdk.Core.Storage;
 using Netwrix.Overlord.Sdk.Core.Storage.Exceptions;
-
 namespace Netwrix.ConnectorFramework;
 
 /// <summary>
 /// <see cref="IStateStorage"/> implementation backed by the connector-state HTTP service.
-/// Values are JSON-serialized and stored as strings. ETags are simulated via companion keys
-/// prefixed with <c>__etag__:</c>, which are invisible to callers.
+/// Values are JSON-serialized and stored as strings.
 /// </summary>
-/// <remarks>
-/// A TOCTOU window exists between the GET (read-for-compare) and the POST (write) in
-/// <see cref="SetIfMatchAsync{T}"/> — unavoidable without native CAS in the HTTP backend.
-/// </remarks>
 public sealed class ConnectorStateStorage : IStateStorage
 {
-    private const string EtagKeyPrefix = "__etag__:";
 
     private readonly ConnectorRequestData _request;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -55,9 +48,8 @@ public sealed class ConnectorStateStorage : IStateStorage
         }
 
         var value = Deserialize<T>(key, json);
-        allState.TryGetValue(EtagKey(key), out var etag);
 
-        return new TryGetResult<T>(value, etag);
+        return new TryGetResult<T>(value);
     }
 
     public async Task SetAsync<T>(string key, T value, CancellationToken cancellationToken = default)
@@ -72,13 +64,8 @@ public sealed class ConnectorStateStorage : IStateStorage
         }
 
         var json = Serialize(key, value);
-        var newEtag = Guid.NewGuid().ToString("N");
 
-        await WriteStateAsync(new Dictionary<string, string>
-        {
-            [key] = json,
-            [EtagKey(key)] = newEtag,
-        }, cancellationToken);
+        await WriteStateAsync(new Dictionary<string, string> { [key] = json }, cancellationToken);
     }
 
     public async Task<string> SetIfMatchAsync<T>(string key, T value, string? expectedETag, CancellationToken cancellationToken = default)
@@ -91,38 +78,9 @@ public sealed class ConnectorStateStorage : IStateStorage
             throw new StateStorageException($"SetIfMatchAsync called but ScanId is null — cannot write state for key: {key}");
         }
 
-        var allState = await FetchAllStateAsync(cancellationToken);
-
-        allState.TryGetValue(key, out var existingJson);
-        allState.TryGetValue(EtagKey(key), out var currentEtag);
-
-        if (expectedETag is null)
-        {
-            // Caller asserts key must not yet exist.
-            if (existingJson is not null)
-            {
-                throw new StateChangedException(key, expectedETag: null, actualETag: currentEtag);
-            }
-        }
-        else
-        {
-            // Caller asserts key must exist with the given ETag.
-            if (existingJson is null || currentEtag != expectedETag)
-            {
-                throw new StateChangedException(key, expectedETag, currentEtag);
-            }
-        }
-
         var json = Serialize(key, value);
-        var newEtag = Guid.NewGuid().ToString("N");
-
-        await WriteStateAsync(new Dictionary<string, string>
-        {
-            [key] = json,
-            [EtagKey(key)] = newEtag,
-        }, cancellationToken);
-
-        return newEtag;
+        await WriteStateAsync(new Dictionary<string, string> { [key] = json }, cancellationToken);
+        return string.Empty;
     }
 
     public async Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
@@ -142,11 +100,7 @@ public sealed class ConnectorStateStorage : IStateStorage
             return false;
         }
 
-        var toDelete = allState.ContainsKey(EtagKey(key))
-            ? new[] { key, EtagKey(key) }
-            : new[] { key };
-
-        await DeleteStateAsync(toDelete, cancellationToken);
+        await DeleteStateAsync(new[] { key }, cancellationToken);
         return true;
     }
 
@@ -162,20 +116,14 @@ public sealed class ConnectorStateStorage : IStateStorage
 
         var allState = await FetchAllStateAsync(cancellationToken);
 
-        var userKeys = allState.Keys
-            .Where(k => !IsEtagKey(k) && MatchesPrefix(k, keyPrefix))
-            .ToList();
+        var toDelete = allState.Keys
+            .Where(k => MatchesPrefix(k, keyPrefix))
+            .ToArray();
 
-        if (userKeys.Count == 0)
+        if (toDelete.Length == 0)
         {
             return;
         }
-
-        var toDelete = userKeys
-            .SelectMany(k => new[] { k, EtagKey(k) })
-            .Where(allState.ContainsKey)
-            .Distinct()
-            .ToArray();
 
         await DeleteStateAsync(toDelete, cancellationToken);
     }
@@ -210,7 +158,7 @@ public sealed class ConnectorStateStorage : IStateStorage
         var allState = await FetchAllStateAsync(cancellationToken);
 
         foreach (var key in allState.Keys
-            .Where(k => !IsEtagKey(k) && MatchesPrefix(k, keyPrefix))
+            .Where(k => MatchesPrefix(k, keyPrefix))
             .Order(StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -444,10 +392,6 @@ public sealed class ConnectorStateStorage : IStateStorage
 
         return headers;
     }
-
-    private static string EtagKey(string key) => EtagKeyPrefix + key;
-
-    private static bool IsEtagKey(string key) => key.StartsWith(EtagKeyPrefix, StringComparison.Ordinal);
 
     private static bool MatchesPrefix(string key, string prefix)
     {
