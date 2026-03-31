@@ -175,7 +175,7 @@ public class AACrawlTaskCorePlatformFacadeTests
     }
 
     [Fact]
-    public async Task UploadActivityRecords_DelegatesToCore_DoesNotFlush()
+    public async Task UploadActivityRecords_IsNoOp_UntilTableExists()
     {
         var writerMock = WriterMock();
         var core = CreateCore(writerMock.Object);
@@ -183,8 +183,7 @@ public class AACrawlTaskCorePlatformFacadeTests
 
         await facade.UploadActivityRecords(new List<ActivityRecord> { new() });
 
-        writerMock.Verify(w => w.SaveObject("activity_records", It.IsAny<ActivityRecord>(), true), Times.Once);
-        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        writerMock.Verify(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()), Times.Never);
     }
 
     [Fact]

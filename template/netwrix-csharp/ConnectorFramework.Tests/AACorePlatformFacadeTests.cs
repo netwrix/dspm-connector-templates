@@ -25,42 +25,12 @@ public class AACorePlatformFacadeTests
     // ── UploadSiTRecords ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task UploadSiTRecords_SavesEachObjectToObjectsTable()
+    public async Task UploadSiTRecords_ThrowsNotSupportedException()
     {
-        var writerMock = WriterMock();
-        var facade = CreateFacade(writerMock.Object);
-        var models = new List<SitObjectImportModel>
-        {
-            new() { Id = Guid.NewGuid().ToString(), Type = Guid.NewGuid() },
-            new() { Id = Guid.NewGuid().ToString(), Type = Guid.NewGuid() },
-        };
+        var facade = CreateFacade(WriterMock().Object);
 
-        await facade.UploadSiTRecords(new CrawlContext(), models, [], [], isFinal: false);
-
-        writerMock.Verify(w => w.SaveObject("objects", models[0], true), Times.Once);
-        writerMock.Verify(w => w.SaveObject("objects", models[1], true), Times.Once);
-    }
-
-    [Fact]
-    public async Task UploadSiTRecords_WhenIsFinalFalse_DoesNotFlush()
-    {
-        var writerMock = WriterMock();
-        var facade = CreateFacade(writerMock.Object);
-
-        await facade.UploadSiTRecords(new CrawlContext(), [], [], [], isFinal: false);
-
-        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task UploadSiTRecords_WhenIsFinalTrue_FlushesWriter()
-    {
-        var writerMock = WriterMock();
-        var facade = CreateFacade(writerMock.Object);
-
-        await facade.UploadSiTRecords(new CrawlContext(), [], [], [], isFinal: true);
-
-        writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            facade.UploadSiTRecords(new CrawlContext(), [], [], [], isFinal: false));
     }
 
     // ── UploadSiTSchemaRecords ────────────────────────────────────────────────
@@ -102,15 +72,14 @@ public class AACorePlatformFacadeTests
     // ── UploadActivityRecords ────────────────────────────────────────────────
 
     [Fact]
-    public async Task UploadActivityRecords_SavesEachRecordToActivityRecordsTable()
+    public async Task UploadActivityRecords_IsNoOp_UntilTableExists()
     {
         var writerMock = WriterMock();
         var facade = CreateFacade(writerMock.Object);
-        var records = new List<ActivityRecord> { new(), new() };
 
-        await facade.UploadActivityRecords(records);
+        await facade.UploadActivityRecords(new List<ActivityRecord> { new(), new() });
 
-        writerMock.Verify(w => w.SaveObject("activity_records", It.IsAny<ActivityRecord>(), true), Times.Exactly(2));
+        writerMock.Verify(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()), Times.Never);
     }
 
     [Fact]

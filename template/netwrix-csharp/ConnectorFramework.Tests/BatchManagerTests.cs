@@ -108,10 +108,9 @@ public class BatchManagerTests
 
         Assert.NotNull(capturedBody);
         var json = System.Text.Encoding.UTF8.GetString(capturedBody!);
-        Assert.Contains("scan_id", json);
-        Assert.Contains("scan_execution_id", json);
-        Assert.Contains("scanned_at", json);
+        Assert.Contains("sourceType", json);
         Assert.Contains("my_table", json);
+        Assert.Contains("key", json);
     }
 
     [Fact]

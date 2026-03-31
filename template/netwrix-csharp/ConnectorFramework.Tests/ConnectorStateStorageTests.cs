@@ -248,7 +248,8 @@ public class ConnectorStateStorageTests
             ["target"] = "\"data\"",
             ["__etag__:target"] = "etag-t",
         };
-        HttpRequestMessage? deleteRequest = null;
+        HttpMethod? deleteMethod = null;
+        string? deleteUrl = null;
         var handlerMock = new Mock<HttpMessageHandler>();
         var callIndex = 0;
         handlerMock.Protected()
@@ -264,7 +265,8 @@ public class ConnectorStateStorageTests
                         Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
                     });
                 }
-                deleteRequest = req;
+                deleteMethod = req.Method;
+                deleteUrl = req.RequestUri!.ToString();
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
@@ -276,11 +278,9 @@ public class ConnectorStateStorageTests
         var deleted = await storage.DeleteAsync("target");
 
         Assert.True(deleted);
-        Assert.NotNull(deleteRequest);
-        Assert.Equal(HttpMethod.Delete, deleteRequest!.Method);
-        var url = deleteRequest.RequestUri!.ToString();
-        Assert.True(url.Contains("name%5B%5D=target") || url.Contains("name[]=target"),
-            $"Expected name[]=target in: {url}");
+        Assert.Equal(HttpMethod.Delete, deleteMethod);
+        Assert.NotNull(deleteUrl);
+        Assert.Contains("name=target", deleteUrl);
     }
 
     // ── DeleteAllAsync ────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ public class ConnectorStateStorageTests
             ["__etag__:source/abc/cursor"] = "e2",
             ["other/key"] = "\"v3\"",
         };
-        HttpRequestMessage? deleteRequest = null;
+        string? deleteUrl = null;
         var handlerMock = new Mock<HttpMessageHandler>();
         var callIndex = 0;
         handlerMock.Protected()
@@ -312,7 +312,7 @@ public class ConnectorStateStorageTests
                         Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
                     });
                 }
-                deleteRequest = req;
+                deleteUrl = req.RequestUri!.ToString();
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
 
@@ -323,12 +323,11 @@ public class ConnectorStateStorageTests
 
         await storage.DeleteAllAsync("source/abc");
 
-        Assert.NotNull(deleteRequest);
-        var url = deleteRequest!.RequestUri!.ToString();
-        Assert.True(url.Contains("bookmark") && url.Contains("cursor"),
-            $"Expected both bookmark and cursor in DELETE url: {url}");
-        Assert.DoesNotContain("other%2Fkey", url);
-        Assert.DoesNotContain("other/key", url);
+        Assert.NotNull(deleteUrl);
+        Assert.True(deleteUrl!.Contains("bookmark") && deleteUrl.Contains("cursor"),
+            $"Expected both bookmark and cursor in DELETE url: {deleteUrl}");
+        Assert.DoesNotContain("other%2Fkey", deleteUrl);
+        Assert.DoesNotContain("other/key", deleteUrl);
     }
 
     // ── ListAllKeysAsync ──────────────────────────────────────────────────────

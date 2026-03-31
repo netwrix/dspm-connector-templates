@@ -334,7 +334,7 @@ public sealed class ConnectorStateStorage : IStateStorage
     {
         var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
         var qs = $"?scanId={Uri.EscapeDataString(ScanId!)}";
-        qs += string.Concat(names.Select(n => $"&name[]={Uri.EscapeDataString(n)}"));
+        qs += string.Concat(names.Select(n => $"&name={Uri.EscapeDataString(n)}"));
         var url = serviceUrl + qs;
 
         try
