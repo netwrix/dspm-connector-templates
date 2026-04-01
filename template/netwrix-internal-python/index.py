@@ -323,7 +323,7 @@ def call_handler(path):
     # Create a new span when trace isolation is enabled
     if TRACE_ISOLATION_ENABLED:
         with tracer.start_as_current_span("process_request") as span:
-            event = Event()
+            event = Event(execution_mode="http")
 
             caller_attributes = {
                 "scan_id": event.headers.get("Scan-Id"),
@@ -359,7 +359,7 @@ def call_handler(path):
                 )
                 raise
     else:
-        event = Event()
+        event = Event(execution_mode="http")
 
         caller_attributes = {
             "scan_id": event.headers.get("Scan-Id"),

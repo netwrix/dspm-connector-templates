@@ -850,7 +850,7 @@ def health():
 @app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
 def call_handler(path: str):
     with tracer.start_as_current_span("process_request") as span:
-        event = Event()
+        event = Event(execution_mode="http")
         ctx = Context()
 
         ctx.log.info(
