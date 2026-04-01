@@ -273,7 +273,7 @@ def format_status_code(resp):
 def format_body(resp):
     if "body" not in resp:
         return ""
-    if type(resp["body"]) is dict:
+    if isinstance(resp["body"], dict):
         return jsonify(resp["body"])
     return str(resp["body"])
 
@@ -281,7 +281,7 @@ def format_body(resp):
 def format_headers(resp):
     if "headers" not in resp:
         return []
-    if type(resp["headers"]) is dict:
+    if isinstance(resp["headers"], dict):
         headers = []
         for key in resp["headers"]:
             header_tuple = (key, resp["headers"][key])
@@ -295,7 +295,7 @@ def format_response(resp):
     if resp is None:
         return ("", 200)
 
-    if type(resp) is dict:
+    if isinstance(resp, dict):
         status_code = format_status_code(resp)
         body = format_body(resp)
         headers = format_headers(resp)
