@@ -40,10 +40,12 @@ Supporting information:
 
 ## Execution Mode
 
-Definition: Determines how a connector container runs. Each template uses a single mode:
+Definition: Controls how a connector container is invoked. **HTTP mode** (default) starts a long-running HTTP server that serves repeated requests. **Job mode** (`EXECUTION_MODE=job`) runs the handler once and exits with a success/failure exit code.
 
-* **Job mode** (`netwrix-python`, `netwrix-csharp`): runs the handler once and exits with a success/failure exit code. Request data is read from the `REQUEST_DATA` environment variable. Used for Kubernetes Jobs invoked by the connector-api.
-* **HTTP mode** (`netwrix-internal-python`, `netwrix-internal-csharp`): starts a long-running HTTP server that serves repeated requests. Used for internal platform functions.
+Supporting information:
+
+* Job mode is used for Kubernetes Jobs invoked by the connector-api
+* Set via the `EXECUTION_MODE` environment variable
 
 ## IConnectorHandler
 
@@ -63,7 +65,7 @@ Supporting information:
 
 ## ScanExecutionId
 
-Definition: A unique identifier for a single invocation of a connector scan. For connector templates (job mode), it is passed in via `REQUEST_DATA` or the `SCAN_EXECUTION_ID` environment variable. For internal templates (HTTP mode), it is passed in via the `Scan-Execution-Id` HTTP header.
+Definition: A unique identifier for a single invocation of a connector scan. It is passed in via the `Scan-Execution-Id` HTTP header (HTTP mode) or the `SCAN_EXECUTION_ID` environment variable (job mode).
 
 Supporting information:
 

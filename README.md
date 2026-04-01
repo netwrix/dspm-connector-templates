@@ -1,6 +1,6 @@
 # dspm-connector-templates
 
-Function templates for building DSPM connectors. Each template provides the runtime scaffolding — OpenTelemetry instrumentation, Redis-based stop/pause/resume signals, and batched data ingestion — so connector authors only need to implement their scanning logic.
+Function templates for building DSPM connectors. Each template provides the runtime scaffolding — HTTP server, job-mode runner, OpenTelemetry instrumentation, Redis-based stop/pause/resume signals, and batched data ingestion — so connector authors only need to implement their scanning logic.
 
 ## Templates
 
@@ -36,12 +36,12 @@ functions:
 
 ## Template Features
 
-### Execution Modes
+### Dual Execution Modes
 
-Each template uses a single execution mode:
+All templates support two execution modes controlled by the `EXECUTION_MODE` environment variable:
 
-- **Job mode** (`netwrix-python`, `netwrix-csharp`): runs the handler once and exits. Used for Kubernetes jobs invoked by the connector-api. Request data is read from the `REQUEST_DATA` environment variable.
-- **HTTP mode** (`netwrix-internal-python`, `netwrix-internal-csharp`): starts a long-running HTTP server (Flask/Waitress for Python, ASP.NET Core for C#). Used for internal platform functions.
+- **HTTP mode** (default): starts a long-running HTTP server (Flask/Waitress for Python, ASP.NET Core for C#).
+- **Job mode** (`EXECUTION_MODE=job`): runs the handler once and exits. Used for Kubernetes jobs invoked by the connector-api.
 
 ### Stop / Pause / Resume
 
@@ -123,7 +123,7 @@ dotnet test ConnectorFramework.Tests/ConnectorFramework.Tests.csproj
 
 ## Deploy
 
-Connector containers are built as multi-stage Docker images and distributed via the Keygen OCI registry (`oci.pkg.keygen.sh`). Connector repositories reference these templates in their `stack.yml`, and images are built and pushed by CI/CD pipelines.
+Connector containers are built as multi-stage Docker images and distributed via the Keygen OCI registry (`oci.pkg.keygen.sh`). Connector repositories reference these templates in their `stack.yml`, and images are built and pushed by CI/CD pipelines. Set `EXECUTION_MODE=job` for Kubernetes Job deployments or leave unset for long-running HTTP server mode.
 
 ## Contributing
 
