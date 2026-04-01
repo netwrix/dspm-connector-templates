@@ -74,3 +74,7 @@ FROM build AS ship
 WORKDIR /home/app/
 
 USER app
+
+ENV PORT=8080
+
+CMD ["python", "index.py"]

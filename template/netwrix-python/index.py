@@ -21,8 +21,10 @@ from typing import Final
 
 import orjson
 import requests
+from flask import Flask, jsonify, request
 from opentelemetry import context, metrics, trace
 from opentelemetry.trace.status import StatusCode
+from waitress import serve
 
 dictConfig(
     {
@@ -52,6 +54,8 @@ SERVICE_NAME: Final = f"{SOURCE_TYPE}-{PROCESS_KEY}" if PROCESS_KEY else f"{SOUR
 # For local development, set to appropriate docker-compose service names
 COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "access-analyzer")
 
+app = Flask(SERVICE_NAME)
+
 
 def get_service_url(service_name: str, port: int = 80) -> str:
     """
@@ -67,7 +71,7 @@ def get_service_url(service_name: str, port: int = 80) -> str:
     return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
 
 
-def setup_opentelemetry() -> Callable[[], None]:
+def setup_opentelemetry(flask_app: object | None = None) -> Callable[[], None]:
     """
     Initialize OpenTelemetry instrumentation for traces, metrics, and logs.
 
@@ -86,6 +90,7 @@ def setup_opentelemetry() -> Callable[[], None]:
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
     from opentelemetry.instrumentation.requests import RequestsInstrumentor
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -127,6 +132,9 @@ def setup_opentelemetry() -> Callable[[], None]:
         handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
         logging.getLogger().addHandler(handler)
 
+        if flask_app is not None:
+            FlaskInstrumentor().instrument_app(flask_app)
+
         RequestsInstrumentor().instrument()
 
         logging.info("OpenTelemetry initialized successfully")
@@ -158,7 +166,7 @@ def get_logger(name: str):
     return logging.getLogger(name)
 
 
-flush_opentelemetry = setup_opentelemetry()
+flush_opentelemetry = setup_opentelemetry(app)
 tracer = get_tracer(SERVICE_NAME)
 logger = get_logger(SERVICE_NAME)
 
@@ -290,13 +298,22 @@ class BatchManager:
 
 
 class Event:
-    def __init__(self):
-        request_data = os.getenv("REQUEST_DATA", "{}")
-        self.body = request_data.encode()
-        self.headers = {}
-        self.method = "POST"
-        self.query = {}
-        self.path = "/"
+    def __init__(self, execution_mode: str = "http"):
+        if execution_mode == "http":
+            # HTTP mode: read from Flask request
+            self.body = request.get_data()
+            self.headers = request.headers
+            self.method = request.method
+            self.query = request.args
+            self.path = request.path
+        else:
+            # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
+            request_data = os.getenv("REQUEST_DATA", "{}")
+            self.body = request_data.encode()
+            self.headers = {}
+            self.method = "POST"
+            self.query = {}
+            self.path = "/"
 
 
 class Context:
@@ -778,6 +795,153 @@ def get_secrets(context: Context) -> dict[str, str]:
     return secrets_dict
 
 
+def format_status_code(resp):
+    if "statusCode" in resp:
+        return resp["statusCode"]
+    return 200
+
+
+def format_body(resp):
+    if "body" not in resp:
+        return ""
+    if isinstance(resp["body"], dict):
+        return jsonify(resp["body"])
+    return str(resp["body"])
+
+
+def format_headers(resp):
+    if "headers" not in resp:
+        return []
+    if isinstance(resp["headers"], dict):
+        headers = []
+        for key in resp["headers"]:
+            header_tuple = (key, resp["headers"][key])
+            headers.append(header_tuple)
+        return headers
+    return resp["headers"]
+
+
+def format_response(resp):
+    if resp is None:
+        return ("", 200)
+
+    if isinstance(resp, dict):
+        status_code = format_status_code(resp)
+        body = format_body(resp)
+        headers = format_headers(resp)
+        return (body, status_code, headers)
+
+    return resp
+
+
+# Needed for openfaas backwards compatibility. Remove once openfaas is gone.
+@app.get("/_/health")
+def health_openfaas():
+    """OpenFaaS health check endpoint (watchdog convention)"""
+    return jsonify(status="ok")
+
+
+@app.get("/health")
+def health():
+    return jsonify(status="ok")
+
+
+@app.route("/", defaults={"path": ""}, methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
+@app.route("/<path:path>", methods=["GET", "PUT", "POST", "PATCH", "DELETE"])
+def call_handler(path: str):
+    with tracer.start_as_current_span("process_request") as span:
+        event = Event(execution_mode="http")
+        ctx = Context()
+
+        ctx.log.info(
+            "Received request",
+            http_method=event.method,
+            http_path=event.path,
+            http_query=dict(event.query),
+        )
+
+        try:
+            # Load secrets from secret files
+            ctx.secrets = get_secrets(ctx)
+
+            request_data = json.loads(event.body)
+            ctx.scan_execution_id = request_data.get("scanExecutionId")
+            ctx.parent_execution_id = request_data.get("parentExecutionId") or None
+
+            if not ctx.secrets:
+                ctx.log.warning("No secrets loaded from secret files")
+            else:
+                ctx.log.info(
+                    "Loaded secrets from secret files",
+                    secret_count=len(ctx.secrets),
+                )
+
+            started_at = datetime.now(UTC).isoformat()
+
+            if ctx.function_type in ("access-scan", "sync"):
+                ctx.update_execution(status="running")
+                ctx.log.info("Started operation", function_type=ctx.function_type)
+
+            with tracer.start_as_current_span("handle_request"):
+                response_data = handler.handle(event, ctx)
+
+            # Flush remaining rows in all tables
+            ctx.flush_tables()
+
+            completed_at = datetime.now(UTC).isoformat()
+            if ctx.function_type == "test-connection" and response_data["statusCode"] == 200:
+                response_data["body"]["startedAt"] = started_at
+                response_data["body"]["completedAt"] = completed_at
+            elif ctx.function_type in ("access-scan", "sync"):
+                if response_data["statusCode"] == 200:
+                    response_data["body"]["startedAt"] = started_at
+                    response_data["body"]["completedAt"] = completed_at
+                    response_status = response_data.get("body", {}).get("status")
+                    if response_status == "stopped":
+                        ctx.update_execution(status="stopped", completed_at=completed_at)
+                        ctx.log.info("Scan was stopped", function_type=ctx.function_type, status="stopped")
+                    elif response_status == "paused":
+                        ctx.update_execution(status="paused")
+                        ctx.log.info("Scan was paused", function_type=ctx.function_type, status="paused")
+                    else:
+                        ctx.update_execution(status="completed", completed_at=completed_at)
+                        ctx.log.info(
+                            f"Completed {ctx.function_type} operation successfully",
+                            function_type=ctx.function_type,
+                            status="completed",
+                        )
+                else:
+                    ctx.update_execution(status="failed", completed_at=completed_at)
+                    ctx.log.error(
+                        f"Failed {ctx.function_type} operation",
+                        function_type=ctx.function_type,
+                        status="failed",
+                        status_code=response_data["statusCode"],
+                    )
+
+            with tracer.start_as_current_span("format_response"):
+                resp = format_response(response_data)
+
+            status_code = 200
+            if isinstance(resp, tuple) and len(resp) >= 2:
+                status_code = resp[1]
+            span.set_attribute("http.status_code", status_code)
+            span.set_status(StatusCode.OK)
+            ctx.log.info("Request completed", http_status_code=status_code)
+
+            return resp
+        except Exception as e:
+            span.set_attribute("http.status_code", 500)
+            span.record_exception(e)
+            span.set_status(StatusCode.ERROR)
+            ctx.log.error(
+                "Request failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
+
+
 def handle_shutdown(signum, frame):
     flush_opentelemetry()
 
@@ -813,7 +977,7 @@ def run_as_job():
             scan_execution_id=ctx.scan_execution_id,
         )
 
-        event = Event()
+        event = Event(execution_mode="job")
 
         try:
             # Update execution status to running for scan/sync operations
@@ -912,9 +1076,38 @@ def run_as_job():
         sys.exit(0 if result["success"] else 1)
 
 
+def get_execution_mode() -> str:
+    """Detect execution mode based on environment.
+
+    Returns:
+        str: 'job' for Kubernetes job mode, 'http' for HTTP server mode
+    """
+    # Explicit mode override
+    if os.getenv("EXECUTION_MODE") == "job":
+        return "job"
+
+    # If REQUEST_DATA is set, assume job mode
+    if os.getenv("REQUEST_DATA"):
+        return "job"
+
+    # Default to HTTP server mode
+    return "http"
+
+
+def run_as_http_server():
+    """Start Flask HTTP server."""
+    port = os.getenv("PORT", 5000)
+    serve(app, host="0.0.0.0", port=port)
+
+
 def main():
-    """Main entry point."""
-    run_as_job()
+    """Main entry point - detect execution mode and run accordingly."""
+    execution_mode = get_execution_mode()
+
+    if execution_mode == "job":
+        run_as_job()
+    else:
+        run_as_http_server()
 
 
 if __name__ == "__main__":
