@@ -833,6 +833,7 @@ def format_response(resp):
 
     return resp
 
+
 # Needed for openfaas backwards compatibility. Remove once openfaas is gone.
 @app.get("/_/health")
 def health_openfaas():
