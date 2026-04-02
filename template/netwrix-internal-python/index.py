@@ -28,13 +28,13 @@ dictConfig(
             }
         },
         "handlers": {
-            "wsgi": {
+            "console": {
                 "class": "logging.StreamHandler",
-                "stream": "ext://flask.logging.wsgi_errors_stream",
+                "stream": "ext://sys.stderr",
                 "formatter": "default",
             }
         },
-        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["wsgi"]},
+        "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["console"]},
     }
 )
 
