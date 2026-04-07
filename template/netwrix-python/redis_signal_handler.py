@@ -124,7 +124,7 @@ class RedisSignalHandler:
             metadata = metadata or {}
             message_data = {
                 "status": status,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(datetime.UTC).isoformat(),
                 "message": message,
                 "partial_data": str(metadata.get("partial_data", False)).lower(),
                 "objects_count": str(metadata.get("objects_count", 0)),
