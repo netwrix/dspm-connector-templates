@@ -374,33 +374,30 @@ class Context:
         if not self.scan_id:
             raise ValueError("scan_id must be set to retrieve connector state")
 
-        try:
-            # Build headers with caller context information
-            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+        # Build headers with caller context information
+        headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
-            # Get service URL for connector-state
-            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
-            url = get_service_url(service_name)
+        # Get service URL for connector-state
+        service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+        url = get_service_url(service_name)
 
-            response = requests.get(
-                url,
-                params={"scanId": self.scan_id},
-                headers=headers,
-                timeout=30,
-            )
+        response = requests.get(
+            url,
+            params={"scanId": self.scan_id},
+            headers=headers,
+            timeout=30,
+        )
 
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
-                    return result.get("data", {})
-                error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
-                raise Exception(error_msg)
-
-            error_msg = f"Status {response.status_code}: {response.text}"
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
+                return result.get("data", {})
+            error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
             raise Exception(error_msg)
-        except Exception:
-            raise
+
+        error_msg = f"Status {response.status_code}: {response.text}"
+        raise Exception(error_msg)
 
     def delete_connector_state(self, names: list[str] | None = None) -> tuple[bool, str | None]:
         """
@@ -656,8 +653,9 @@ class Context:
         """
         try:
             # Query Postgres for scan execution status via app-data-query function
+            safe_scan_execution_id = scan_execution_id.replace("'", "''")
             query = (
-                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{scan_execution_id}' LIMIT 1"
+                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{safe_scan_execution_id}' LIMIT 1"
             )
             payload = {"query": query}
 
