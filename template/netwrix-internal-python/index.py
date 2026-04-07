@@ -14,6 +14,7 @@ from collections.abc import Callable
 from logging.config import dictConfig
 from typing import Final
 
+import requests
 from flask import Flask, jsonify, request
 from opentelemetry import metrics, trace
 from opentelemetry.trace.status import StatusCode
@@ -39,8 +40,23 @@ dictConfig(
 )
 
 SERVICE_NAME: Final = os.getenv("SERVICE_NAME", __name__)
+COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "access-analyzer")
 TRACE_ISOLATION_ENABLED: Final = os.getenv("TRACE_ISOLATION_ENABLED", "false").lower() == "true"
 app = Flask(SERVICE_NAME)
+
+
+def get_service_url(service_name: str, port: int = 80) -> str:
+    """
+    Get the URL for a common function service.
+
+    Uses Kubernetes FQDN format:
+    http://<service-name>.<namespace>.svc.cluster.local:<port>
+
+    Args:
+        service_name: Name of the service to call
+        port: Port number (default: 80)
+    """
+    return f"http://{service_name}.{COMMON_FUNCTIONS_NAMESPACE}.svc.cluster.local:{port}"
 
 
 def setup_opentelemetry(app: object | None = None) -> Callable[[], None]:
@@ -174,6 +190,157 @@ class Context:
         self.log = ContextLogger(self)
         self.caller_attributes = caller_attributes
         self.execution_mode = "http"
+        self.scan_id: str | None = None
+        self.scan_execution_id: str | None = None
+
+    def access_scan_success_response(self):
+        return {"statusCode": 200, "body": {}}
+
+    def get_caller_headers(self) -> dict[str, str]:
+        """
+        Build headers dict with caller context information to pass to common functions.
+        Only includes headers that have non-None values.
+        """
+        return {"Scan-Id": self.scan_id or "", "Scan-Execution-Id": self.scan_execution_id or ""}
+
+    def get_connector_state(self) -> dict:
+        """
+        Retrieve connector state from the connector-state function for the current scan_id.
+
+        Returns:
+            dict: Dictionary containing the connector state key-value pairs
+
+        Raises:
+            ValueError: If scan_id is not set
+            Exception: If the request fails
+        """
+        if not self.scan_id:
+            raise ValueError("scan_id must be set to retrieve connector state")
+
+        try:
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+            url = get_service_url(service_name)
+
+            response = requests.get(
+                url,
+                params={"scanId": self.scan_id},
+                headers=headers,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
+                    return result.get("data", {})
+                error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
+                raise Exception(error_msg)
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            raise Exception(error_msg)
+        except Exception:
+            raise
+
+    def set_connector_state(self, data: dict) -> tuple[bool, str | None]:
+        """
+        Save connector state to the connector-state function for the current scan_id.
+
+        Args:
+            data: Dictionary of key-value pairs to save
+
+        Returns:
+            tuple: (success: bool, error_message: str | None)
+
+        Raises:
+            ValueError: If scan_id is not set or data is not a dictionary
+        """
+        if not self.scan_id:
+            raise ValueError("scan_id must be set to save connector state")
+
+        if not isinstance(data, dict):
+            raise ValueError("data must be a dictionary")
+
+        try:
+            payload = {"scanId": self.scan_id, "data": data}
+
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+            url = get_service_url(service_name)
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    self.log.info("Saved connector state successfully", key_count=len(data))
+                    return True, None
+                error_msg = f"Failed to save connector state: {result.get('error', 'Unknown error')}"
+                return False, error_msg
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error saving connector state: {str(e)}"
+            return False, error_msg
+
+    def delete_connector_state(self, names: list[str] | None = None) -> tuple[bool, str | None]:
+        """
+        Delete connector state from the connector-state function for the current scan_id.
+
+        Args:
+            names: Optional list of item names to delete. If None, deletes all data for the scan_id.
+
+        Returns:
+            tuple: (success: bool, error_message: str | None)
+
+        Raises:
+            ValueError: If scan_id is not set
+        """
+        if not self.scan_id:
+            raise ValueError("scan_id must be set to delete connector state")
+
+        try:
+            params: dict[str, str | list[str]] = {"scanId": self.scan_id}
+            if names:
+                params["name"] = names
+
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
+            url = get_service_url(service_name)
+
+            response = requests.delete(
+                url,
+                params=params,
+                headers=headers,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    log_attrs = {}
+                    if names:
+                        log_attrs["deleted_names"] = names
+                        log_attrs["deleted_count"] = len(names)
+                    self.log.info("Deleted connector state successfully", **log_attrs)
+                    return True, None
+                error_msg = f"Failed to delete connector state: {result.get('error', 'Unknown error')}"
+                return False, error_msg
+
+            error_msg = f"Status {response.status_code}: {response.text}"
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error deleting connector state: {str(e)}"
+            return False, error_msg
 
     def create_thread(self, target, *args, **kwargs):
         """
@@ -210,6 +377,69 @@ class Context:
 
         # Create thread with wrapped target
         return threading.Thread(*args, target=wrapped_target, **kwargs)
+
+    def get_prior_execution(self, scan_execution_id: str) -> dict | None:
+        """
+        Query Postgres scan_executions table for prior execution with same scan_execution_id.
+
+        Used to detect if a scan is resuming from a paused state.
+
+        Args:
+            scan_execution_id: The execution ID to query
+
+        Returns:
+            dict with 'status' field if found, None if not found or on error
+        """
+        try:
+            # Query Postgres for scan execution status via app-data-query function
+            query = (
+                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{scan_execution_id}' LIMIT 1"
+            )
+            payload = {"query": query}
+
+            # Build headers with caller context information
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+
+            # Get service URL for app-data-query using standard routing
+            service_name = os.getenv("APP_DATA_QUERY_FUNCTION", "app-data-query")
+            url = get_service_url(service_name)
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    data = result.get("data", [])
+                    if data and len(data) > 0:
+                        execution_data = data[0]
+                        completed_objects = execution_data.get("completed_objects")
+                        if completed_objects > 0:
+                            self.log.info(
+                                "Retrieved prior execution",
+                                scan_execution_id=scan_execution_id,
+                                completed_objects=completed_objects,
+                                status=execution_data.get("status"),
+                            )
+                            return execution_data
+                    self.log.info("No prior execution found", scan_execution_id=scan_execution_id)
+                    return None
+                self.log.info(
+                    "Query failed", scan_execution_id=scan_execution_id, error=result.get("error", "Unknown error")
+                )
+                return None
+            self.log.info(
+                "Failed to query prior execution", status_code=response.status_code, response=response.text[:200]
+            )
+            return None
+
+        except Exception as e:
+            self.log.warning("Error querying prior execution", scan_execution_id=scan_execution_id, error=str(e))
+            return None
 
 
 class ContextLogger:
@@ -330,6 +560,8 @@ def call_handler(path):
                 "scan_execution_id": event.headers.get("Scan-Execution-Id"),
             }
             context = Context(caller_attributes)
+            context.scan_id = caller_attributes.get("scan_id")
+            context.scan_execution_id = caller_attributes.get("scan_execution_id")
 
             context.log.info(
                 "Received request",
@@ -366,6 +598,7 @@ def call_handler(path):
             "scan_execution_id": event.headers.get("Scan-Execution-Id"),
         }
         context = Context(caller_attributes)
+        context.scan_execution_id = caller_attributes.get("scan_execution_id")
 
         context.log.info(
             "Received request",
@@ -420,13 +653,26 @@ def get_execution_mode() -> str:
 def run_as_job():
     """Execute handler once as a Kubernetes job."""
     # Create a new span when trace isolation is enabled
+    # Parse scan execution ID from REQUEST_DATA environment variable
+    request_data_str = os.getenv("REQUEST_DATA", "{}")
+    try:
+        request_data = json.loads(request_data_str)
+    except json.JSONDecodeError:
+        request_data = {}
+
+    scan_id = request_data.get("scanId") or os.getenv("SCAN_ID")
+    scan_execution_id = request_data.get("scanExecutionId") or os.getenv("SCAN_EXECUTION_ID")
+
     if TRACE_ISOLATION_ENABLED:
         with tracer.start_as_current_span("job_execution") as span:
-            ctx = Context({})
+            ctx = Context({"scan_id": scan_id, "scan_execution_id": scan_execution_id})
+            ctx.scan_id = scan_id
+            ctx.scan_execution_id = scan_execution_id
 
             ctx.log.info(
                 "Starting job execution",
                 execution_mode="job",
+                scan_execution_id=scan_execution_id,
             )
 
             ctx.execution_mode = "job"
@@ -473,11 +719,14 @@ def run_as_job():
             print(json.dumps(result))
             sys.exit(0 if result["success"] else 1)
     else:
-        ctx = Context({})
+        ctx = Context({"scan_id": scan_id, "scan_execution_id": scan_execution_id})
+        ctx.scan_id = scan_id
+        ctx.scan_execution_id = scan_execution_id
 
         ctx.log.info(
             "Starting job execution",
             execution_mode="job",
+            scan_execution_id=scan_execution_id,
         )
 
         ctx.execution_mode = "job"
