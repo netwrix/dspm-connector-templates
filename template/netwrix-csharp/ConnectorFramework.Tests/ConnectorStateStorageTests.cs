@@ -53,9 +53,6 @@ public class ConnectorStateStorageTests
     private static string EmptyStateResponse()
         => JsonSerializer.Serialize(new { success = true, data = new Dictionary<string, string>() });
 
-    private static string OkResponse()
-        => JsonSerializer.Serialize(new { success = true });
-
     // ── TryGetAsync ──────────────────────────────────────────────────────────
 
     [Fact]

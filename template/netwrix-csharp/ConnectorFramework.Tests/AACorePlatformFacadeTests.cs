@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
-using Netwrix.Overlord.Sdk.Core.State.Models;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;

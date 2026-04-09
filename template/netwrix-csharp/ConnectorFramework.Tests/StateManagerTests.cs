@@ -29,11 +29,11 @@ public class StateManagerTests
     }
 
     [Fact]
-    public void NewManager_DefaultSupportedStates_StopOnly()
+    public void NewManager_DefaultSupportedStates_StopAndPause()
     {
         var mgr = CreateManager();
         Assert.True(mgr.SupportedStates.Stop);
-        Assert.False(mgr.SupportedStates.Pause);
+        Assert.True(mgr.SupportedStates.Pause);
         Assert.False(mgr.SupportedStates.Resume);
     }
 
