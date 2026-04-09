@@ -60,7 +60,11 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
         }
     }
 
-    public void Dispose() => _writeLock.Dispose();
+    public void Dispose()
+    {
+        _writeLock.Dispose();
+        GC.SuppressFinalize(this);
+    }
 
     /// <summary>
     /// Data is transmitted as plain JSON; no decryption is performed in Access Analyzer connectors.

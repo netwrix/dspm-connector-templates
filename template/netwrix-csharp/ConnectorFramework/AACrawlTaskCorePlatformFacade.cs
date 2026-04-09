@@ -150,14 +150,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
 
     public Task FinaliseTask(APICrawlTaskProgress taskProgress)
     {
-        if (taskProgress.ChildTasks is null)
-        {
-            _logger.LogDebug(
-                "FinaliseTask: no child tasks for {CrawlTaskReference} — nothing to enqueue",
-                taskProgress.CrawlTaskReference);
-            return Task.CompletedTask;
-        }
-
         _processedErrors.AddOrUpdate(
             taskProgress.CrawlTaskReference,
             taskProgress.CrawlTaskResults?.Sum(x => x.ItemErrorCount) ?? 0,
@@ -168,17 +160,26 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             taskProgress.ProcessedItemCount,
             (_, _) => taskProgress.ProcessedItemCount);
 
-        foreach (var childTask in taskProgress.ChildTasks)
-        {
-            _crawlTaskQueue.Enqueue(childTask);
-        }
-
-        // Record task duration and completion metric.
+        // Record duration and completion for all tasks, including leaf tasks (ChildTasks is null).
         if (_taskStartTimestamps.TryRemove(taskProgress.CrawlTaskReference, out var startTimestamp))
         {
             ConnectorMetrics.TaskDuration.Record(Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
         }
         ConnectorMetrics.TasksCompleted.Add(1);
+
+        if (taskProgress.ChildTasks is null)
+        {
+            _logger.LogDebug(
+                "FinaliseTask: leaf task {CrawlTaskReference} completed — no children to enqueue",
+                taskProgress.CrawlTaskReference);
+        }
+        else
+        {
+            foreach (var childTask in taskProgress.ChildTasks)
+            {
+                _crawlTaskQueue.Enqueue(childTask);
+            }
+        }
 
         // Remove the finalized task's entries to prevent unbounded memory growth
         // on long-running connectors with many child tasks.

@@ -18,6 +18,8 @@ internal static class Program
 {
     private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
 
+    private const string SecretsBasePath = "/var/secrets";
+
     private static string SanitizeForLog(string? value) =>
         (value ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
 
@@ -585,8 +587,8 @@ internal static class Program
                 return false;
             }
 
-            // Path traversal guard: secretName must resolve within /var/secrets/
-            var basePath = Path.GetFullPath("/var/secrets");
+            // Path traversal guard: secretName must resolve within SecretsBasePath.
+            var basePath = Path.GetFullPath(SecretsBasePath);
             var resolvedPath = Path.GetFullPath(Path.Combine(basePath, secretName));
             if (!resolvedPath.StartsWith(basePath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             {

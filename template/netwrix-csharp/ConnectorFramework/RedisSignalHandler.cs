@@ -73,7 +73,7 @@ public class RedisSignalHandler
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error reading control signal for execution {ExecutionId}", executionId);
+            _logger.LogWarning(ex, "Error reading control signal for execution {ExecutionId}", executionId);
             return null;
         }
     }

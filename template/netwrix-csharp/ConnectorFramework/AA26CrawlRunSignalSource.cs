@@ -5,7 +5,8 @@ namespace Netwrix.ConnectorFramework;
 /// <summary>
 /// AA26 implementation of <see cref="ICrawlRunSignalSource"/>.
 /// Bridges <see cref="RedisSignalHandler"/> into the Module B signal polling contract.
-/// Scoped — carries per-scan stream offset (<c>_lastMessageId</c>) to avoid replaying old signals.
+/// Singleton — safe because the job-mode host processes exactly one scan per process lifetime;
+/// <c>_lastMessageId</c> is never shared across scans.
 /// </summary>
 internal sealed class AA26CrawlRunSignalSource : ICrawlRunSignalSource
 {

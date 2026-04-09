@@ -54,13 +54,15 @@ public class CrawlRunOrchestratorPauseResumeTests
         var orchestrator = container.GetRequiredService<ICrawlRunOrchestrator>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        // Act — Run 1: start, wait for root task to be picked up, then send Pause.
-        // With MaxWorkers=1 the orchestrator waits for the running worker before checking
-        // the next signal, so by the time Pause is observed all 9 children are in the queue.
+        // Act — Run 1: hold the root task so Pause is sent before its children are enqueued.
+        // Without the hold there is a race: Crawl() returns synchronously, children are enqueued,
+        // and the orchestrator may pick one up before the test thread sends Pause.
+        processorFactory.HoldNextCrawl();
         var run1Task = orchestrator.RunAsync(request, cts.Token);
 
-        await processorFactory.WaitForCallAsync(cts.Token); // root task started
-        signalSource.Send(CrawlRunSignal.Pause);
+        await processorFactory.WaitForCallAsync(cts.Token); // root task started (still held in Crawl)
+        signalSource.Send(CrawlRunSignal.Pause);             // enqueue Pause before root completes
+        processorFactory.UnblockCrawl();                     // release root → children enqueued, orchestrator sees Pause next
 
         var run1ExitReason = await run1Task;
         Assert.Equal(CrawlRunExitReason.Paused, run1ExitReason);
