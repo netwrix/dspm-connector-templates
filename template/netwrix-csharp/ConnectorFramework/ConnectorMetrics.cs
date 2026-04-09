@@ -36,6 +36,14 @@ internal static class ConnectorMetrics
         unit: "s",
         description: "Wall-clock duration of individual crawl tasks in seconds");
 
+    /// <summary>
+    /// Number of crawl tasks that permanently failed after exhausting all retry attempts.
+    /// Emitted by CrawlRunOrchestrator on the same meter when Module B orchestration is active.
+    /// </summary>
+    public static readonly Counter<long> TasksDeadLettered = Meter.CreateCounter<long>(
+        "connector.tasks.dead_lettered",
+        description: "Number of crawl tasks that permanently failed after exhausting all retry attempts");
+
     // ── Source rate limiting ──────────────────────────────────────────────────
 
     /// <summary>
