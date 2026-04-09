@@ -25,9 +25,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ConnectorFramework\ConnectorFramework.csproj" />
-    <!-- Sdk.Core/Cloud are PrivateAssets in ConnectorFramework; add directly so tests can compile -->
-    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.12-preview" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.12-preview" />
+    <!-- Sdk.Cloud/Core/Orchestration come transitively via ConnectorFramework but listed
+         explicitly so test code can reference their types without an indirect dependency. -->
+    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.14-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.14-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Orchestration" Version="2.0.0.14-preview" />
+    <PackageReference Include="Microsoft.Extensions.Resilience" Version="8.*" />
   </ItemGroup>
 
 </Project>
