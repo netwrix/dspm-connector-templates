@@ -654,9 +654,7 @@ class Context:
         try:
             # Query Postgres for scan execution status via app-data-query function
             safe_scan_execution_id = scan_execution_id.replace("'", "''")
-            query = (
-                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{safe_scan_execution_id}' LIMIT 1"
-            )
+            query = f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{safe_scan_execution_id}' LIMIT 1"
             payload = {"query": query}
 
             # Build headers with caller context information
