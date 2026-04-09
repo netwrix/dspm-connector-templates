@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Http;
+using Netwrix.Overlord.Sdk.Core.Crawling;
 using Netwrix.Overlord.Sdk.Core.Storage;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
@@ -63,7 +64,9 @@ internal static class Program
             .CreateLogger("Netwrix.ConnectorFramework.Program");
 
         if (!ValidateSecretMappings(Environment.GetEnvironmentVariable(EnvironmentVariables.SecretMappings), requestLogger))
+        {
             return 1;
+        }
 
         app.Use(async (ctx, next) =>
         {
@@ -129,7 +132,9 @@ internal static class Program
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Netwrix.ConnectorFramework.Program");
 
         if (!ValidateSecretMappings(Environment.GetEnvironmentVariable(EnvironmentVariables.SecretMappings), logger))
+        {
             return 1;
+        }
 
         int exitCode;
         Activity? jobActivity = null;
@@ -229,7 +234,37 @@ internal static class Program
         {
             services.AddSingleton<IConnectionMultiplexer>(_ =>
             {
-                var opts = ConfigurationOptions.Parse(redisUrl);
+                // ConfigurationOptions.Parse() does not handle redis:// URIs correctly —
+                // it treats the full URI string (including scheme and /db path) as the
+                // hostname, which breaks DNS. Parse redis:// URIs manually.
+                ConfigurationOptions opts;
+                if (Uri.TryCreate(redisUrl, UriKind.Absolute, out var uri)
+                    && uri.Scheme is "redis" or "rediss")
+                {
+                    opts = new ConfigurationOptions();
+                    opts.EndPoints.Add(uri.Host, uri.Port > 0 ? uri.Port : 6379);
+                    if (uri.AbsolutePath.TrimStart('/') is { Length: > 0 } dbStr
+                        && int.TryParse(dbStr, out var db))
+                    {
+                        opts.DefaultDatabase = db;
+                    }
+
+                    var userInfo = uri.UserInfo;
+                    if (!string.IsNullOrEmpty(userInfo))
+                    {
+                        opts.Password = userInfo.Contains(':') ? userInfo[(userInfo.IndexOf(':') + 1)..] : userInfo;
+                    }
+
+                    if (uri.Scheme == "rediss")
+                    {
+                        opts.Ssl = true;
+                    }
+                }
+                else
+                {
+                    opts = ConfigurationOptions.Parse(redisUrl);
+                }
+                opts.AbortOnConnectFail = false;
                 opts.ConnectTimeout = 2000;
                 opts.SyncTimeout = 2000;
                 opts.KeepAlive = 60;
@@ -247,6 +282,16 @@ internal static class Program
         services.AddScoped<RedisSignalHandler>(sp => new RedisSignalHandler(
             sp.GetService<IConnectionMultiplexer>(),       // null if REDIS_URL not set
             sp.GetRequiredService<ILogger<RedisSignalHandler>>()));
+        // Singleton: CrawlRunOrchestrator (singleton) resolves ICrawlRunSignalSource from the root
+        // IServiceProvider at construction time. A scoped registration would cause a captive-dependency
+        // error in development (ValidateScopes=true). The signal source gets a dedicated
+        // RedisSignalHandler so its _lastMessageId offset is independent of the scoped handlers
+        // used by StateManager.
+        services.AddSingleton<ICrawlRunSignalSource>(sp =>
+            new AA26CrawlRunSignalSource(new RedisSignalHandler(
+                sp.GetService<IConnectionMultiplexer>(),
+                sp.GetRequiredService<ILogger<RedisSignalHandler>>())));
+
         // ScanShutdownService is Singleton so all scopes share the same shutdown token.
         // StateManager is Scoped (owns per-scan state) but reads the token from the Singleton.
         services.AddSingleton<ScanShutdownService>();
@@ -507,7 +552,9 @@ internal static class Program
     internal static bool ValidateSecretMappings(string? mappings, ILogger logger)
     {
         if (string.IsNullOrEmpty(mappings))
+        {
             return true;
+        }
 
         foreach (var entry in mappings.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
