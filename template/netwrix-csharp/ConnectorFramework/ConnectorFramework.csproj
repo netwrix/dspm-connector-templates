@@ -19,11 +19,15 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
       <_Parameter1>ConnectorFramework.Tests</_Parameter1>
     </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>SharepointOnline.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.12-preview" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.12-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.14-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.14-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Orchestration" Version="2.0.0.14-preview" />
     <PackageReference Include="Netwrix.UK.Core" Version="5.2.2.1" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.*" />
     <PackageReference Include="OpenTelemetry" Version="1.9.*" />

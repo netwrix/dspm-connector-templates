@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Http;
+using Netwrix.Overlord.Sdk.Core.Crawling;
 using Netwrix.Overlord.Sdk.Core.Storage;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
@@ -16,6 +18,8 @@ internal static class Program
 {
     private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
 
+    private const string SecretsBasePath = "/var/secrets";
+
     private static string SanitizeForLog(string? value) =>
         (value ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
 
@@ -27,8 +31,8 @@ internal static class Program
     }
 
     internal static bool IsJobMode() =>
-        Environment.GetEnvironmentVariable("EXECUTION_MODE") == "job" ||
-        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("REQUEST_DATA"));
+        Environment.GetEnvironmentVariable(EnvironmentVariables.ExecutionMode) == "job" ||
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(EnvironmentVariables.RequestData));
 
     // ── HTTP mode ─────────────────────────────────────────────────────────────
 
@@ -46,7 +50,7 @@ internal static class Program
         // The DI-resolved singleton is used for all request handling.
         ((IConnectorHandler)Activator.CreateInstance(handlerType)!).MapServices(builder.Services, builder.Configuration);
 
-        var portStr = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+        var portStr = Environment.GetEnvironmentVariable(EnvironmentVariables.Port) ?? "5000";
         if (!int.TryParse(portStr, System.Globalization.NumberStyles.Integer,
                 System.Globalization.CultureInfo.InvariantCulture, out var port))
         {
@@ -60,6 +64,11 @@ internal static class Program
         var requestLogger = app.Services
             .GetRequiredService<ILoggerFactory>()
             .CreateLogger("Netwrix.ConnectorFramework.Program");
+
+        if (!ValidateSecretMappings(Environment.GetEnvironmentVariable(EnvironmentVariables.SecretMappings), requestLogger))
+        {
+            return 1;
+        }
 
         app.Use(async (ctx, next) =>
         {
@@ -123,10 +132,17 @@ internal static class Program
         await host.StartAsync();
 
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Netwrix.ConnectorFramework.Program");
+
+        if (!ValidateSecretMappings(Environment.GetEnvironmentVariable(EnvironmentVariables.SecretMappings), logger))
+        {
+            return 1;
+        }
+
         int exitCode;
         Activity? jobActivity = null;
         FunctionContext? context = null;
         var isLongRunning = false;
+        var executionStopwatch = Stopwatch.StartNew();
         try
         {
             await using var scope = host.Services.CreateAsyncScope();
@@ -170,6 +186,10 @@ internal static class Program
                 }
                 await context.FlushTablesAsync();
 
+                ConnectorMetrics.ExecutionDuration.Record(
+                    executionStopwatch.Elapsed.TotalSeconds,
+                    new KeyValuePair<string, object?>("status", "succeeded"));
+
                 jobActivity?.SetStatus(ActivityStatusCode.Ok);
 
                 Console.WriteLine(JsonSerializer.Serialize(result));
@@ -178,6 +198,10 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            ConnectorMetrics.ExecutionDuration.Record(
+                executionStopwatch.Elapsed.TotalSeconds,
+                new KeyValuePair<string, object?>("status", "failed"));
+
             jobActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             jobActivity?.RecordException(ex);
             logger.LogError(ex, "Job failed");
@@ -207,12 +231,42 @@ internal static class Program
         services.AddScoped<RequestDataHolder>();
 
         // Redis — Singleton multiplexer (nullable: null if REDIS_URL is not set)
-        var redisUrl = Environment.GetEnvironmentVariable("REDIS_URL");
+        var redisUrl = Environment.GetEnvironmentVariable(EnvironmentVariables.RedisUrl);
         if (!string.IsNullOrEmpty(redisUrl))
         {
             services.AddSingleton<IConnectionMultiplexer>(_ =>
             {
-                var opts = ConfigurationOptions.Parse(redisUrl);
+                // ConfigurationOptions.Parse() does not handle redis:// URIs correctly —
+                // it treats the full URI string (including scheme and /db path) as the
+                // hostname, which breaks DNS. Parse redis:// URIs manually.
+                ConfigurationOptions opts;
+                if (Uri.TryCreate(redisUrl, UriKind.Absolute, out var uri)
+                    && uri.Scheme is "redis" or "rediss")
+                {
+                    opts = new ConfigurationOptions();
+                    opts.EndPoints.Add(uri.Host, uri.Port > 0 ? uri.Port : 6379);
+                    if (uri.AbsolutePath.TrimStart('/') is { Length: > 0 } dbStr
+                        && int.TryParse(dbStr, out var db))
+                    {
+                        opts.DefaultDatabase = db;
+                    }
+
+                    var userInfo = uri.UserInfo;
+                    if (!string.IsNullOrEmpty(userInfo))
+                    {
+                        opts.Password = userInfo.Contains(':') ? userInfo[(userInfo.IndexOf(':') + 1)..] : userInfo;
+                    }
+
+                    if (uri.Scheme == "rediss")
+                    {
+                        opts.Ssl = true;
+                    }
+                }
+                else
+                {
+                    opts = ConfigurationOptions.Parse(redisUrl);
+                }
+                opts.AbortOnConnectFail = false;
                 opts.ConnectTimeout = 2000;
                 opts.SyncTimeout = 2000;
                 opts.KeepAlive = 60;
@@ -223,9 +277,23 @@ internal static class Program
         // RedisSignalHandler accepts IConnectionMultiplexer? and degrades gracefully.
 
         services.AddHttpClient();
+        // Apply rate-limit tracking to every named HttpClient (including connector-developer clients).
+        services.ConfigureAll<HttpClientFactoryOptions>(options =>
+            options.HttpMessageHandlerBuilderActions.Add(
+                b => b.AdditionalHandlers.Add(new RateLimitTrackingHandler())));
         services.AddScoped<RedisSignalHandler>(sp => new RedisSignalHandler(
             sp.GetService<IConnectionMultiplexer>(),       // null if REDIS_URL not set
             sp.GetRequiredService<ILogger<RedisSignalHandler>>()));
+        // Singleton: CrawlRunOrchestrator (singleton) resolves ICrawlRunSignalSource from the root
+        // IServiceProvider at construction time. A scoped registration would cause a captive-dependency
+        // error in development (ValidateScopes=true). The signal source gets a dedicated
+        // RedisSignalHandler so its _lastMessageId offset is independent of the scoped handlers
+        // used by StateManager.
+        services.AddSingleton<ICrawlRunSignalSource>(sp =>
+            new AA26CrawlRunSignalSource(new RedisSignalHandler(
+                sp.GetService<IConnectionMultiplexer>(),
+                sp.GetRequiredService<ILogger<RedisSignalHandler>>())));
+
         // ScanShutdownService is Singleton so all scopes share the same shutdown token.
         // StateManager is Scoped (owns per-scan state) but reads the token from the Singleton.
         services.AddSingleton<ScanShutdownService>();
@@ -272,13 +340,13 @@ internal static class Program
                 Body: body,
                 Execution: new ExecutionContext(
                     ScanId: http.Request.Headers["Scan-Id"].FirstOrDefault()
-                                      ?? Environment.GetEnvironmentVariable("SCAN_ID"),
+                                      ?? Environment.GetEnvironmentVariable(EnvironmentVariables.ScanId),
                     ScanExecutionId: http.Request.Headers["Scan-Execution-Id"].FirstOrDefault()
-                                      ?? Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID"),
-                    SourceId: Environment.GetEnvironmentVariable("SOURCE_ID"),
-                    SourceType: Environment.GetEnvironmentVariable("SOURCE_TYPE"),
-                    SourceVersion: Environment.GetEnvironmentVariable("SOURCE_VERSION"),
-                    FunctionType: Environment.GetEnvironmentVariable("FUNCTION_TYPE")));
+                                      ?? Environment.GetEnvironmentVariable(EnvironmentVariables.ScanExecutionId),
+                    SourceId: Environment.GetEnvironmentVariable(EnvironmentVariables.SourceId),
+                    SourceType: Environment.GetEnvironmentVariable(EnvironmentVariables.SourceType),
+                    SourceVersion: Environment.GetEnvironmentVariable(EnvironmentVariables.SourceVersion),
+                    FunctionType: Environment.GetEnvironmentVariable(EnvironmentVariables.FunctionType)));
         });
     }
 
@@ -287,19 +355,19 @@ internal static class Program
         ILoggingBuilder? _,
         bool isHttpMode)
     {
-        if (Environment.GetEnvironmentVariable("OTEL_ENABLED")?.ToLowerInvariant() == "false")
+        if (Environment.GetEnvironmentVariable(EnvironmentVariables.OtelEnabled)?.ToLowerInvariant() == "false")
         {
             return;
         }
 
-        var sourceType = Environment.GetEnvironmentVariable("SOURCE_TYPE") ?? "internal";
-        var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
+        var sourceType = Environment.GetEnvironmentVariable(EnvironmentVariables.SourceType) ?? "internal";
+        var functionType = Environment.GetEnvironmentVariable(EnvironmentVariables.FunctionType) ?? "netwrix";
         var serviceName = $"{sourceType}-{functionType}";
-        var environment = Environment.GetEnvironmentVariable("ENVIRONMENT") ?? "development";
+        var environment = Environment.GetEnvironmentVariable(EnvironmentVariables.Environment) ?? "development";
         // Default matches the Python template (index.py:118) and the in-cluster collector address.
         // Connector authors running outside this cluster should set OTEL_EXPORTER_OTLP_ENDPOINT
         // explicitly; leaving it unset will silently fail to export rather than error.
-        var otelEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")
+        var otelEndpoint = Environment.GetEnvironmentVariable(EnvironmentVariables.OtelExporterOtlpEndpoint)
                            ?? "http://otel-collector.access-analyzer.svc.cluster.local:4318";
 
         var resourceBuilder = ResourceBuilder.CreateDefault()
@@ -308,6 +376,11 @@ internal static class Program
             {
                 ["service.namespace"] = "dspm-connectors",
                 ["deployment.environment"] = environment,
+                // Execution context — allows Prometheus to correlate all metrics from
+                // this connector process with a specific scan execution.
+                ["scan_execution_id"] = Environment.GetEnvironmentVariable(EnvironmentVariables.ScanExecutionId) ?? "",
+                ["scan_id"] = Environment.GetEnvironmentVariable(EnvironmentVariables.ScanId) ?? "",
+                ["source_id"] = Environment.GetEnvironmentVariable(EnvironmentVariables.SourceId) ?? "",
             });
 
         services.AddOpenTelemetry()
@@ -331,6 +404,7 @@ internal static class Program
             .WithMetrics(metrics =>
             {
                 metrics.SetResourceBuilder(resourceBuilder)
+                    .AddMeter(ConnectorMetrics.MeterName)
                     .AddHttpClientInstrumentation();
 
                 if (isHttpMode)
@@ -338,11 +412,15 @@ internal static class Program
                     metrics.AddAspNetCoreInstrumentation();
                 }
 
-                metrics.AddOtlpExporter(o =>
-                {
-                    o.Endpoint = new Uri($"{otelEndpoint}/v1/metrics");
-                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
-                });
+                metrics.AddOtlpExporter(
+                    (o, readerOptions) =>
+                    {
+                        o.Endpoint = new Uri($"{otelEndpoint}/v1/metrics");
+                        o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                        // Export every 15 s so short-lived job-mode connectors produce
+                        // enough data points for timeseries graphs (default is 60 s).
+                        readerOptions.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 15_000;
+                    });
             })
             .WithLogging(
                 logging =>
@@ -420,7 +498,7 @@ internal static class Program
     {
         logging.ClearProviders();
         logging.AddConsole();
-        var logLevel = Environment.GetEnvironmentVariable("LOG_LEVEL")?.ToUpperInvariant() switch
+        var logLevel = Environment.GetEnvironmentVariable(EnvironmentVariables.LogLevel)?.ToUpperInvariant() switch
         {
             "DEBUG" => LogLevel.Debug,
             "WARNING" or "WARN" => LogLevel.Warning,
@@ -442,16 +520,16 @@ internal static class Program
 
     internal static string BuildRequestPath()
     {
-        var functionType = Environment.GetEnvironmentVariable("FUNCTION_TYPE");
+        var functionType = Environment.GetEnvironmentVariable(EnvironmentVariables.FunctionType);
         var derivedPath = functionType != null
             ? $"/connector/{functionType.Replace("-", "_", StringComparison.Ordinal)}"
             : "/connector/test_connection";
-        return Environment.GetEnvironmentVariable("REQUEST_PATH") ?? derivedPath;
+        return Environment.GetEnvironmentVariable(EnvironmentVariables.RequestPath) ?? derivedPath;
     }
 
     private static ConnectorRequestData BuildJobRequestData()
     {
-        var requestDataJson = Environment.GetEnvironmentVariable("REQUEST_DATA") ?? "{}";
+        var requestDataJson = Environment.GetEnvironmentVariable(EnvironmentVariables.RequestData) ?? "{}";
         var body = Encoding.UTF8.GetBytes(requestDataJson);
 
         return new ConnectorRequestData(
@@ -460,11 +538,71 @@ internal static class Program
             Headers: new Dictionary<string, string>(),
             Body: body,
             Execution: new ExecutionContext(
-                ScanId: Environment.GetEnvironmentVariable("SCAN_ID"),
-                ScanExecutionId: Environment.GetEnvironmentVariable("SCAN_EXECUTION_ID"),
-                SourceId: Environment.GetEnvironmentVariable("SOURCE_ID"),
-                SourceType: Environment.GetEnvironmentVariable("SOURCE_TYPE"),
-                SourceVersion: Environment.GetEnvironmentVariable("SOURCE_VERSION"),
-                FunctionType: Environment.GetEnvironmentVariable("FUNCTION_TYPE")));
+                ScanId: Environment.GetEnvironmentVariable(EnvironmentVariables.ScanId),
+                ScanExecutionId: Environment.GetEnvironmentVariable(EnvironmentVariables.ScanExecutionId),
+                SourceId: Environment.GetEnvironmentVariable(EnvironmentVariables.SourceId),
+                SourceType: Environment.GetEnvironmentVariable(EnvironmentVariables.SourceType),
+                SourceVersion: Environment.GetEnvironmentVariable(EnvironmentVariables.SourceVersion),
+                FunctionType: Environment.GetEnvironmentVariable(EnvironmentVariables.FunctionType)));
+    }
+
+    /// <summary>
+    /// Parses and validates the SECRET_MAPPINGS environment variable at startup.
+    /// Returns true if valid (or absent); returns false and logs a critical error if malformed
+    /// or if any entry attempts path traversal.
+    /// </summary>
+    internal static bool ValidateSecretMappings(string? mappings, ILogger logger)
+    {
+        if (string.IsNullOrEmpty(mappings))
+        {
+            return true;
+        }
+
+        foreach (var entry in mappings.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = entry.Trim();
+            var parts = trimmed.Split(':', 2);
+            if (parts.Length != 2)
+            {
+                logger.LogCritical(
+                    "SECRET_MAPPINGS entry '{Entry}' is malformed: expected 'aliasKey:secretName' format",
+                    trimmed);
+                return false;
+            }
+
+            var aliasKey = parts[0].Trim();
+            var secretName = parts[1].Trim();
+
+            if (string.IsNullOrEmpty(aliasKey))
+            {
+                logger.LogCritical(
+                    "SECRET_MAPPINGS entry '{Entry}' has an empty alias key", trimmed);
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(secretName))
+            {
+                logger.LogCritical(
+                    "SECRET_MAPPINGS entry '{Entry}' has an empty secret name", trimmed);
+                return false;
+            }
+
+            // Path traversal guard: secretName must resolve within SecretsBasePath.
+            var basePath = Path.GetFullPath(SecretsBasePath);
+            var resolvedPath = Path.GetFullPath(Path.Combine(basePath, secretName));
+            if (!resolvedPath.StartsWith(basePath + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                logger.LogCritical(
+                    "SECRET_MAPPINGS entry '{Entry}': secret name '{SecretName}' contains a path traversal attempt",
+                    trimmed, secretName);
+                return false;
+            }
+
+            logger.LogDebug(
+                "SECRET_MAPPINGS: alias '{AliasKey}' maps to secret '{SecretName}'",
+                aliasKey, secretName);
+        }
+
+        return true;
     }
 }

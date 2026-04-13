@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -131,5 +132,51 @@ public class ProgramTests
             Environment.SetEnvironmentVariable("REQUEST_PATH", null);
             Environment.SetEnvironmentVariable("FUNCTION_TYPE", null);
         }
+    }
+
+    // ── ValidateSecretMappings ────────────────────────────────────────────────
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsTrue_WhenMappingsIsNull()
+    {
+        Assert.True(Program.ValidateSecretMappings(null, NullLogger.Instance));
+    }
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsTrue_WhenMappingsIsEmpty()
+    {
+        Assert.True(Program.ValidateSecretMappings("", NullLogger.Instance));
+    }
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsTrue_WhenMappingsAreValid()
+    {
+        Assert.True(Program.ValidateSecretMappings(
+            "clientId:client-id,tenantId:tenant-id", NullLogger.Instance));
+    }
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsFalse_WhenEntryMissingColon()
+    {
+        Assert.False(Program.ValidateSecretMappings("clientIdclient-id", NullLogger.Instance));
+    }
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsFalse_WhenAliasKeyIsEmpty()
+    {
+        Assert.False(Program.ValidateSecretMappings(":secretName", NullLogger.Instance));
+    }
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsFalse_WhenSecretNameIsEmpty()
+    {
+        Assert.False(Program.ValidateSecretMappings("aliasKey:", NullLogger.Instance));
+    }
+
+    [Fact]
+    public void ValidateSecretMappings_ReturnsFalse_WhenPathTraversalAttempted()
+    {
+        Assert.False(Program.ValidateSecretMappings(
+            "key:../../etc/passwd", NullLogger.Instance));
     }
 }

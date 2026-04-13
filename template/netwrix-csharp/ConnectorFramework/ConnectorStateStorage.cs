@@ -12,21 +12,39 @@ namespace Netwrix.ConnectorFramework;
 public sealed class ConnectorStateStorage : IStateStorage
 {
 
-    private readonly ConnectorRequestData _request;
+    private readonly string? _scanId;
+    private readonly string? _scanExecutionId;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ConnectorStateStorage> _logger;
 
+    /// <summary>
+    /// Scoped DI constructor — used when resolving from a request context.
+    /// </summary>
     public ConnectorStateStorage(
         ConnectorRequestData request,
         IHttpClientFactory httpClientFactory,
         ILogger<ConnectorStateStorage> logger)
+        : this(request.Execution.ScanId, request.Execution.ScanExecutionId, httpClientFactory, logger)
     {
-        _request = request;
+    }
+
+    /// <summary>
+    /// Factory constructor — used by <see cref="ConnectorRunStateStorageFactory"/> to create
+    /// instances without requiring a live request scope (e.g. inside the singleton orchestrator).
+    /// </summary>
+    public ConnectorStateStorage(
+        string? scanId,
+        string? scanExecutionId,
+        IHttpClientFactory httpClientFactory,
+        ILogger<ConnectorStateStorage> logger)
+    {
+        _scanId = scanId;
+        _scanExecutionId = scanExecutionId;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
-    private string? ScanId => _request.Execution.ScanId;
+    private string? ScanId => _scanId;
 
     // ── IStateStorage ────────────────────────────────────────────────────────
 
@@ -357,14 +375,14 @@ public sealed class ConnectorStateStorage : IStateStorage
     {
         var headers = new Dictionary<string, string>();
 
-        if (_request.Execution.ScanId is not null)
+        if (_scanId is not null)
         {
-            headers["Scan-Id"] = _request.Execution.ScanId;
+            headers["Scan-Id"] = _scanId;
         }
 
-        if (_request.Execution.ScanExecutionId is not null)
+        if (_scanExecutionId is not null)
         {
-            headers["Scan-Execution-Id"] = _request.Execution.ScanExecutionId;
+            headers["Scan-Execution-Id"] = _scanExecutionId;
         }
 
         headers["Function-Type"] = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";

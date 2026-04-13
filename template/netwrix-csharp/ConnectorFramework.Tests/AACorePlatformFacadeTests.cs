@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
-using Netwrix.Overlord.Sdk.Core.State.Models;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -67,6 +66,22 @@ public class AACorePlatformFacadeTests
         await facade.UploadSiTSchemaRecords(new CrawlContext(), "schema_table", [], isFinal: true);
 
         writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+    }
+
+    [Fact]
+    public async Task UploadSiTSchemaRecords_ConcurrentCalls_DoNotThrowAndSaveAllEntities()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var entity = new JsonObject { ["id"] = "x" };
+
+        var tasks = Enumerable.Range(0, 10).Select(_ =>
+            facade.UploadSiTSchemaRecords(new CrawlContext(), "permissions", [entity], isFinal: false));
+
+        // Should complete without throwing InvalidOperationException from BatchManager's single-writer guard
+        await Task.WhenAll(tasks);
+
+        writerMock.Verify(w => w.SaveObject("permissions", entity, true), Times.Exactly(10));
     }
 
     // ── UploadActivityRecords ────────────────────────────────────────────────

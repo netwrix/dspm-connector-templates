@@ -8,12 +8,16 @@ using Netwrix.Overlord.Sdk.Core.State.Models;
 
 namespace Netwrix.ConnectorFramework;
 
-public sealed class AACorePlatformFacade : ICorePlatformFacade
+public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
 {
     // private const string ActivityRecordsTable = "activity_records";
 
     private readonly ILogger<AACorePlatformFacade> _logger;
     private readonly IScanWriter _writer;
+    // Serialises concurrent UploadSiTSchemaRecords calls from multiple orchestrator workers.
+    // All workers share the same facade instance (via AACrawlTaskFacadeHolder) and therefore
+    // the same BatchManager per table; BatchManager.AddObject enforces a single-writer contract.
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     public AACorePlatformFacade(ILogger<AACorePlatformFacade> logger, IScanWriter writer)
     {
@@ -37,15 +41,29 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade
     public async Task UploadSiTSchemaRecords(CrawlContext context, string tableName, IReadOnlyList<JsonObject> entities, bool isFinal,
         int chunkId = 1)
     {
-        foreach (var entity in entities)
+        await _writeLock.WaitAsync();
+        try
         {
-            _writer.SaveObject(tableName, entity);
-        }
+            foreach (var entity in entities)
+            {
+                _writer.SaveObject(tableName, entity);
+            }
 
-        if (isFinal)
-        {
-            await _writer.FlushTablesAsync(CancellationToken.None);
+            if (isFinal)
+            {
+                await _writer.FlushTablesAsync(CancellationToken.None);
+            }
         }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    public void Dispose()
+    {
+        _writeLock.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>

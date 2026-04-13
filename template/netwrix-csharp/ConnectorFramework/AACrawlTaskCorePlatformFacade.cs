@@ -21,6 +21,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     private readonly ConcurrentQueue<ApiChildCrawlTask> _crawlTaskQueue = new();
     private readonly ConcurrentDictionary<Guid, int> _processedItems = new();
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
+    private readonly ConcurrentDictionary<Guid, long> _taskStartTimestamps = new();
     private int _reportedItemsCount;
     private long _lastUpdateTimestamp = Stopwatch.GetTimestamp();
     // CAS guard: 0 = idle, 1 = updating. Prevents two concurrent callers from both
@@ -90,6 +91,9 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             throw new InvalidOperationException("Initialize() must be called before StartTask.");
         }
 
+        _taskStartTimestamps[crawlTaskReference] = Stopwatch.GetTimestamp();
+        ConnectorMetrics.TasksStarted.Add(1);
+
         return Task.FromResult(new CrawlTaskConfiguration
         {
             TenancyReference = Guid.Empty,
@@ -136,7 +140,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Unable to perform regular task update for task {TaskReference}", taskReference);
+            _logger.LogError(ex, "Unable to perform regular task update for task {TaskReference}", taskReference);
         }
         finally
         {
@@ -146,14 +150,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
 
     public Task FinaliseTask(APICrawlTaskProgress taskProgress)
     {
-        if (taskProgress.ChildTasks is null)
-        {
-            _logger.LogDebug(
-                "FinaliseTask: no child tasks for {CrawlTaskReference} — nothing to enqueue",
-                taskProgress.CrawlTaskReference);
-            return Task.CompletedTask;
-        }
-
         _processedErrors.AddOrUpdate(
             taskProgress.CrawlTaskReference,
             taskProgress.CrawlTaskResults?.Sum(x => x.ItemErrorCount) ?? 0,
@@ -164,9 +160,25 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             taskProgress.ProcessedItemCount,
             (_, _) => taskProgress.ProcessedItemCount);
 
-        foreach (var childTask in taskProgress.ChildTasks)
+        // Record duration and completion for all tasks, including leaf tasks (ChildTasks is null).
+        if (_taskStartTimestamps.TryRemove(taskProgress.CrawlTaskReference, out var startTimestamp))
         {
-            _crawlTaskQueue.Enqueue(childTask);
+            ConnectorMetrics.TaskDuration.Record(Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
+        }
+        ConnectorMetrics.TasksCompleted.Add(1);
+
+        if (taskProgress.ChildTasks is null)
+        {
+            _logger.LogDebug(
+                "FinaliseTask: leaf task {CrawlTaskReference} completed — no children to enqueue",
+                taskProgress.CrawlTaskReference);
+        }
+        else
+        {
+            foreach (var childTask in taskProgress.ChildTasks)
+            {
+                _crawlTaskQueue.Enqueue(childTask);
+            }
         }
 
         // Remove the finalized task's entries to prevent unbounded memory growth
