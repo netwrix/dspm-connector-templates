@@ -6,7 +6,7 @@ Monitors Redis Streams for control signals from the Core API
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import redis
@@ -124,7 +124,7 @@ class RedisSignalHandler:
             metadata = metadata or {}
             message_data = {
                 "status": status,
-                "timestamp": datetime.now(datetime.UTC).isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "message": message,
                 "partial_data": str(metadata.get("partial_data", False)).lower(),
                 "objects_count": str(metadata.get("objects_count", 0)),
