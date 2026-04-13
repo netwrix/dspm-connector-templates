@@ -62,7 +62,10 @@ RUN --mount=from=ghcr.io/astral-sh/uv,source=/uv,target=/bin/uv \
 
 # Copy template-provided function files (state_manager, redis_signal_handler, etc)
 COPY --chown=app:app ./template/netwrix-internal-python/function/ .
+COPY --chown=app:app ./template/netwrix-internal-python/redis_signal_handler.py    .
+COPY --chown=app:app ./template/netwrix-internal-python/state_manager.py           .
 
+# Copy function-specific code (handler, requirements, etc) - this overrides template defaults if present
 COPY --chown=app:app ${FUNCTION_DIR}/ .
 
 FROM build AS ship
