@@ -171,7 +171,7 @@ public sealed class BatchManager : IAsyncDisposable
 
     private async Task PostBatchAsync(byte[] dataArray, int count, CancellationToken ct)
     {
-        var sourceType = Environment.GetEnvironmentVariable("SOURCE_TYPE") ?? "";
+        var sourceType = Environment.GetEnvironmentVariable(EnvironmentVariables.SourceType) ?? "";
 
         // Build envelope using Utf8JsonWriter to avoid JSON injection via sourceType / tableName
         using var ms = new MemoryStream();
@@ -186,11 +186,11 @@ public sealed class BatchManager : IAsyncDisposable
         }
         var envelope = ms.ToArray();
 
-        var serviceUrl = ServiceUrlHelper.Resolve("SAVE_DATA_FUNCTION", "data-ingestion", useAsync: true);
+        var serviceUrl = ServiceUrlHelper.Resolve(EnvironmentVariables.SaveDataFunction, ServiceNames.DataIngestion, useAsync: true);
 
         try
         {
-            using var client = _httpClientFactory.CreateClient("data-ingestion");
+            using var client = _httpClientFactory.CreateClient(ServiceNames.DataIngestion);
             using var content = new ByteArrayContent(envelope);
             content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
 
@@ -205,6 +205,10 @@ public sealed class BatchManager : IAsyncDisposable
 
             if (response.IsSuccessStatusCode)
             {
+                var tableTag = new KeyValuePair<string, object?>("table", _tableName);
+                ConnectorMetrics.BatchSize.Record(count, tableTag);
+                ConnectorMetrics.ObjectsUploaded.Add(count, tableTag);
+
                 if (_onFlushed is not null && count > 0)
                 {
                     await _onFlushed(count, ct);
@@ -212,7 +216,7 @@ public sealed class BatchManager : IAsyncDisposable
             }
             else
             {
-                _logger.LogWarning("Batch flush returned {StatusCode} for table {Table}", (int)response.StatusCode, _tableName);
+                _logger.LogError("Batch flush returned {StatusCode} for table {Table}", (int)response.StatusCode, _tableName);
             }
         }
         catch (Exception ex)

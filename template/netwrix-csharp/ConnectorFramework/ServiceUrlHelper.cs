@@ -23,19 +23,19 @@ internal static class ServiceUrlHelper
 
         var serviceName = defaultServiceName;
 
-        if (Environment.GetEnvironmentVariable("RUN_LOCAL") == "true")
+        if (Environment.GetEnvironmentVariable(EnvironmentVariables.RunLocal) == "true")
         {
             return $"http://{serviceName}:8080";
         }
 
-        if (Environment.GetEnvironmentVariable("USE_OPENFAAS_GATEWAY") == "true")
+        if (Environment.GetEnvironmentVariable(EnvironmentVariables.UseOpenfaasGateway) == "true")
         {
-            var gateway = Environment.GetEnvironmentVariable("OPENFAAS_GATEWAY") ?? "http://gateway.openfaas:8080";
+            var gateway = Environment.GetEnvironmentVariable(EnvironmentVariables.OpenfaasGateway) ?? "http://gateway.openfaas:8080";
             var endpoint = useAsync ? "async-function" : "function";
             return $"{gateway}/{endpoint}/{serviceName}";
         }
 
-        var ns = Environment.GetEnvironmentVariable("COMMON_FUNCTIONS_NAMESPACE") ?? "access-analyzer";
+        var ns = Environment.GetEnvironmentVariable(EnvironmentVariables.CommonFunctionsNamespace) ?? "access-analyzer";
         return $"http://{serviceName}.{ns}.svc.cluster.local:{port}";
     }
 }

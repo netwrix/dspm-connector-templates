@@ -277,4 +277,4 @@ public sealed class StateManager : IAsyncDisposable
 /// <summary>
 /// Declares which control operations this connector supports.
 /// </summary>
-public record SupportedStates(bool Stop = true, bool Pause = false, bool Resume = false);
+public record SupportedStates(bool Stop = true, bool Pause = true, bool Resume = false);
