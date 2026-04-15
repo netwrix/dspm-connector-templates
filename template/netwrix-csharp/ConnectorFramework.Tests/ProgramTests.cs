@@ -134,6 +134,48 @@ public class ProgramTests
         }
     }
 
+    // ── DeriveExitCode ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void DeriveExitCode_Returns0_WhenStatusCodeIs200()
+    {
+        Assert.Equal(0, Program.DeriveExitCode("""{"statusCode":200,"body":{}}"""));
+    }
+
+    [Fact]
+    public void DeriveExitCode_Returns1_WhenStatusCodeIs400()
+    {
+        // FunctionContext.ErrorResponse(clientError: true, ...) sets statusCode 400.
+        Assert.Equal(1, Program.DeriveExitCode("""{"statusCode":400,"body":{"error":"bad input"}}"""));
+    }
+
+    [Fact]
+    public void DeriveExitCode_Returns1_WhenStatusCodeIs500()
+    {
+        // FunctionContext.ErrorResponse(clientError: false, ...) sets statusCode 500.
+        Assert.Equal(1, Program.DeriveExitCode("""{"statusCode":500,"body":{"error":"internal error"}}"""));
+    }
+
+    [Fact]
+    public void DeriveExitCode_Returns0_WhenStatusCodeFieldIsAbsent()
+    {
+        // Handlers that return a plain object without statusCode are treated as success.
+        Assert.Equal(0, Program.DeriveExitCode("{}"));
+    }
+
+    [Fact]
+    public void DeriveExitCode_Returns0_WhenStatusCodeIs399()
+    {
+        // Boundary: 399 is below the error threshold.
+        Assert.Equal(0, Program.DeriveExitCode("""{"statusCode":399}"""));
+    }
+
+    [Fact]
+    public void DeriveExitCode_Returns1_WhenStatusCodeIs401()
+    {
+        Assert.Equal(1, Program.DeriveExitCode("""{"statusCode":401}"""));
+    }
+
     // ── ValidateSecretMappings ────────────────────────────────────────────────
 
     [Fact]

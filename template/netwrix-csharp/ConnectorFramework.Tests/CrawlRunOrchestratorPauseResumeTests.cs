@@ -60,7 +60,14 @@ public class CrawlRunOrchestratorPauseResumeTests
         processorFactory.HoldNextCrawl();
         var run1Task = orchestrator.RunAsync(request, cts.Token);
 
-        await processorFactory.WaitForCallAsync(cts.Token); // root task started (still held in Crawl)
+        // Race RunAsync against the signal wait so that a fault in RunAsync (e.g.
+        // OptionsValidationException thrown before any worker starts) surfaces immediately
+        // rather than silently disappearing and leaving the test to time out.
+        var signalWait1 = processorFactory.WaitForCallAsync(cts.Token);
+        await Task.WhenAny(run1Task, signalWait1);
+        if (run1Task.IsCompleted) await run1Task; // re-throw any fault
+        await signalWait1; // root task started (still held in Crawl)
+
         signalSource.Send(CrawlRunSignal.Pause);             // enqueue Pause before root completes
         processorFactory.UnblockCrawl();                     // release root → children enqueued, orchestrator sees Pause next
 
@@ -109,7 +116,11 @@ public class CrawlRunOrchestratorPauseResumeTests
         // Act
         var runTask = orchestrator.RunAsync(request, cts.Token);
 
-        await processorFactory.WaitForCallAsync(cts.Token); // root task started
+        var signalWait = processorFactory.WaitForCallAsync(cts.Token);
+        await Task.WhenAny(runTask, signalWait);
+        if (runTask.IsCompleted) await runTask; // re-throw any fault
+        await signalWait; // root task started
+
         signalSource.Send(CrawlRunSignal.Stop);
 
         var exitReason = await runTask;
