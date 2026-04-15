@@ -198,9 +198,13 @@ internal static class Program
                     new KeyValuePair<string, object?>("status", metricStatus));
 
                 if (exitCode == 0)
+                {
                     jobActivity?.SetStatus(ActivityStatusCode.Ok);
+                }
                 else
+                {
                     jobActivity?.SetStatus(ActivityStatusCode.Error, "Handler returned error statusCode");
+                }
             }
         }
         catch (Exception ex)
@@ -284,6 +288,14 @@ internal static class Program
         // RedisSignalHandler accepts IConnectionMultiplexer? and degrades gracefully.
 
         services.AddHttpClient();
+        services.AddHttpClient<ConnectorStateClient>(ConnectorStateClient.HttpClientName, client =>
+        {
+            var url = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
+            client.BaseAddress = new Uri(url.TrimEnd('/') + "/");
+            client.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Function-Type",
+                Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix");
+        });
         // Apply rate-limit tracking to every named HttpClient (including connector-developer clients).
         services.ConfigureAll<HttpClientFactoryOptions>(options =>
             options.HttpMessageHandlerBuilderActions.Add(

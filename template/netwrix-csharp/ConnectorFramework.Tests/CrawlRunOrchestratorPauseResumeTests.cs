@@ -65,7 +65,11 @@ public class CrawlRunOrchestratorPauseResumeTests
         // rather than silently disappearing and leaving the test to time out.
         var signalWait1 = processorFactory.WaitForCallAsync(cts.Token);
         await Task.WhenAny(run1Task, signalWait1);
-        if (run1Task.IsCompleted) await run1Task; // re-throw any fault
+        if (run1Task.IsCompleted)
+        {
+            await run1Task; // re-throw any fault
+        }
+
         await signalWait1; // root task started (still held in Crawl)
 
         signalSource.Send(CrawlRunSignal.Pause);             // enqueue Pause before root completes
@@ -118,7 +122,11 @@ public class CrawlRunOrchestratorPauseResumeTests
 
         var signalWait = processorFactory.WaitForCallAsync(cts.Token);
         await Task.WhenAny(runTask, signalWait);
-        if (runTask.IsCompleted) await runTask; // re-throw any fault
+        if (runTask.IsCompleted)
+        {
+            await runTask; // re-throw any fault
+        }
+
         await signalWait; // root task started
 
         signalSource.Send(CrawlRunSignal.Stop);
