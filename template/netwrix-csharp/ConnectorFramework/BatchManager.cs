@@ -81,7 +81,9 @@ public sealed class BatchManager : IAsyncDisposable
                 // AddObject has no ct — batches auto-enqueued mid-scan use None.
                 if (!_flushChannel.Writer.TryWrite((snapshot.Data, snapshot.Count, CancellationToken.None)))
                 {
-                    _logger.LogError("Failed to enqueue batch for table {Table} — channel is closed", _tableName);
+                    throw new InvalidOperationException(
+                        $"Batch enqueue failed for table '{_tableName}' — channel is closed. " +
+                        "AddObject() must not be called after FlushAsync().");
                 }
 
                 _buffer = NewBuffer();
@@ -102,10 +104,11 @@ public sealed class BatchManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Flushes remaining buffered objects and waits for the background worker to drain.
-    /// Call this once at the end of a scan before the handler returns.
+    /// Drains any buffered objects into the flush channel without closing it or awaiting the
+    /// background worker. Safe to call while other workers will continue writing after this.
+    /// Unlike <see cref="FlushAsync"/>, does NOT signal channel completion.
     /// </summary>
-    public async Task FlushAsync(CancellationToken ct = default)
+    public void FlushBuffer(CancellationToken ct = default)
     {
         if (_buffer.Length > 1)
         {
@@ -113,13 +116,23 @@ public sealed class BatchManager : IAsyncDisposable
             // Propagate ct so the _onFlushed callback (progress reporting) respects cancellation.
             if (!_flushChannel.Writer.TryWrite((snapshot.Data, snapshot.Count, ct)))
             {
-                _logger.LogError("Failed to enqueue final batch for table {Table} — channel is closed", _tableName);
+                throw new InvalidOperationException(
+                    $"Batch enqueue failed for table '{_tableName}' — channel is closed. " +
+                    "FlushBuffer() must not be called after FlushAsync().");
             }
 
             _buffer = NewBuffer();
             _pendingObjectCount = 0;
         }
+    }
 
+    /// <summary>
+    /// Flushes remaining buffered objects and waits for the background worker to drain.
+    /// Call this once at the end of a scan before the handler returns.
+    /// </summary>
+    public async Task FlushAsync(CancellationToken ct = default)
+    {
+        FlushBuffer(ct);
         _flushChannel.Writer.TryComplete();
         await _flushWorker;
     }
