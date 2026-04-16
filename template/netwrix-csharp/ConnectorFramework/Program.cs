@@ -157,6 +157,9 @@ internal static class Program
             var handlerInstance = scope.ServiceProvider.GetRequiredService<IConnectorHandler>();
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
+            lifetime.ApplicationStopping.Register(() =>
+                logger.LogWarning("SIGTERM received — ApplicationStopping triggered; job will be cancelled"));
+
             isLongRunning = requestData.Execution.IsLongRunning;
 
             using (logger.BeginScope(new Dictionary<string, object?>
