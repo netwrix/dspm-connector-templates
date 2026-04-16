@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Netwrix.Overlord.Sdk.Core.Storage;
@@ -14,7 +13,7 @@ public sealed class ConnectorStateStorage : IStateStorage
 
     private readonly string? _scanId;
     private readonly string? _scanExecutionId;
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ConnectorStateClient _stateClient;
     private readonly ILogger<ConnectorStateStorage> _logger;
 
     /// <summary>
@@ -22,29 +21,28 @@ public sealed class ConnectorStateStorage : IStateStorage
     /// </summary>
     public ConnectorStateStorage(
         ConnectorRequestData request,
-        IHttpClientFactory httpClientFactory,
+        ConnectorStateClient stateClient,
         ILogger<ConnectorStateStorage> logger)
-        : this(request.Execution.ScanId, request.Execution.ScanExecutionId, httpClientFactory, logger)
+        : this(request.Execution.ScanId, request.Execution.ScanExecutionId, stateClient, logger)
     {
     }
 
     /// <summary>
     /// Factory constructor — used by <see cref="ConnectorRunStateStorageFactory"/> to create
     /// instances without requiring a live request scope (e.g. inside the singleton orchestrator).
+    /// Must remain <c>public</c>: connector assemblies are not listed in InternalsVisibleTo.
     /// </summary>
     public ConnectorStateStorage(
         string? scanId,
         string? scanExecutionId,
-        IHttpClientFactory httpClientFactory,
+        ConnectorStateClient stateClient,
         ILogger<ConnectorStateStorage> logger)
     {
         _scanId = scanId;
         _scanExecutionId = scanExecutionId;
-        _httpClientFactory = httpClientFactory;
+        _stateClient = stateClient;
         _logger = logger;
     }
-
-    private string? ScanId => _scanId;
 
     // ── IStateStorage ────────────────────────────────────────────────────────
 
@@ -52,7 +50,7 @@ public sealed class ConnectorStateStorage : IStateStorage
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
 
-        if (ScanId is null)
+        if (_scanId is null)
         {
             _logger.LogWarning("TryGetAsync called but ScanId is null — returning NotFound");
             return TryGetResult<T>.NotFound;
@@ -75,7 +73,7 @@ public sealed class ConnectorStateStorage : IStateStorage
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
 
-        if (ScanId is null)
+        if (_scanId is null)
         {
             _logger.LogWarning("SetAsync called but ScanId is null — skipping");
             return;
@@ -91,11 +89,14 @@ public sealed class ConnectorStateStorage : IStateStorage
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
 
-        if (ScanId is null)
+        if (_scanId is null)
         {
             throw new StateStorageException($"SetIfMatchAsync called but ScanId is null — cannot write state for key: {key}");
         }
 
+        // The connector-state service does not support optimistic concurrency (ETags).
+        // expectedETag is intentionally ignored; the write is always unconditional.
+        // Return string.Empty to signal "no ETag" per the IStateStorage contract.
         var json = Serialize(key, value);
         await WriteStateAsync(new Dictionary<string, string> { [key] = json }, cancellationToken);
         return string.Empty;
@@ -105,7 +106,7 @@ public sealed class ConnectorStateStorage : IStateStorage
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
 
-        if (ScanId is null)
+        if (_scanId is null)
         {
             _logger.LogWarning("DeleteAsync called but ScanId is null — skipping");
             return false;
@@ -119,7 +120,7 @@ public sealed class ConnectorStateStorage : IStateStorage
     {
         ArgumentNullException.ThrowIfNull(keyPrefix);
 
-        if (ScanId is null)
+        if (_scanId is null)
         {
             _logger.LogWarning("DeleteAllAsync called but ScanId is null — skipping");
             return;
@@ -160,7 +161,7 @@ public sealed class ConnectorStateStorage : IStateStorage
         string keyPrefix,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        if (ScanId is null)
+        if (_scanId is null)
         {
             _logger.LogWarning("ListAllKeysAsync called but ScanId is null — returning empty");
             yield break;
@@ -197,141 +198,14 @@ public sealed class ConnectorStateStorage : IStateStorage
 
     // ── HTTP helpers ─────────────────────────────────────────────────────────
 
-    private async Task<Dictionary<string, string>> FetchAllStateAsync(CancellationToken ct)
-    {
-        var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
-        var url = $"{serviceUrl}?scanId={Uri.EscapeDataString(ScanId!)}";
+    private Task<Dictionary<string, string>> FetchAllStateAsync(CancellationToken ct)
+        => _stateClient.GetStateAsync(_scanId!, _scanExecutionId, ct);
 
-        try
-        {
-            using var client = _httpClientFactory.CreateClient("connector-state");
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            foreach (var (k, v) in BuildCallerHeaders())
-            {
-                request.Headers.TryAddWithoutValidation(k, v);
-            }
+    private Task WriteStateAsync(Dictionary<string, string> data, CancellationToken ct)
+        => _stateClient.PostStateAsync(_scanId!, _scanExecutionId, data, ct);
 
-            using var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new StateStorageException($"connector-state GET returned {(int)response.StatusCode}");
-            }
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
-            {
-                var error = root.TryGetProperty("error", out var errProp) ? errProp.GetString() : "Unknown error";
-                throw new StateStorageException($"connector-state GET failed: {error}");
-            }
-
-            if (root.TryGetProperty("data", out var dataProp))
-            {
-                return dataProp.Deserialize<Dictionary<string, string>>() ?? new Dictionary<string, string>();
-            }
-
-            return new Dictionary<string, string>();
-        }
-        catch (StateStorageException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new StateStorageException($"connector-state GET failed for scan {ScanId}", ex);
-        }
-    }
-
-    private async Task WriteStateAsync(Dictionary<string, string> data, CancellationToken ct)
-    {
-        var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
-        var payload = new { scanId = ScanId, data };
-
-        try
-        {
-            using var client = _httpClientFactory.CreateClient("connector-state");
-            using var request = new HttpRequestMessage(HttpMethod.Post, serviceUrl)
-            {
-                Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json"),
-            };
-            foreach (var (k, v) in BuildCallerHeaders())
-            {
-                request.Headers.TryAddWithoutValidation(k, v);
-            }
-
-            using var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new StateStorageException($"connector-state POST returned {(int)response.StatusCode}");
-            }
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrWhiteSpace(body))
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("success", out var successProp) && !successProp.GetBoolean())
-                {
-                    var error = root.TryGetProperty("error", out var errProp) ? errProp.GetString() : "Unknown error";
-                    throw new StateStorageException($"connector-state POST failed: {error}");
-                }
-            }
-        }
-        catch (StateStorageException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new StateStorageException($"connector-state POST failed for scan {ScanId}", ex);
-        }
-    }
-
-    private async Task DeleteStateAsync(string[] names, CancellationToken ct)
-    {
-        var serviceUrl = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
-        var qs = $"?scanId={Uri.EscapeDataString(ScanId!)}";
-        qs += string.Concat(names.Select(n => $"&name={Uri.EscapeDataString(n)}"));
-        var url = serviceUrl + qs;
-
-        try
-        {
-            using var client = _httpClientFactory.CreateClient("connector-state");
-            using var request = new HttpRequestMessage(HttpMethod.Delete, url);
-            foreach (var (k, v) in BuildCallerHeaders())
-            {
-                request.Headers.TryAddWithoutValidation(k, v);
-            }
-
-            using var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new StateStorageException($"connector-state DELETE returned {(int)response.StatusCode}");
-            }
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrWhiteSpace(body))
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("success", out var successProp) && !successProp.GetBoolean())
-                {
-                    var error = root.TryGetProperty("error", out var errProp) ? errProp.GetString() : "Unknown error";
-                    throw new StateStorageException($"connector-state DELETE failed: {error}");
-                }
-            }
-        }
-        catch (StateStorageException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new StateStorageException($"connector-state DELETE failed for scan {ScanId}", ex);
-        }
-    }
+    private Task DeleteStateAsync(string[] names, CancellationToken ct)
+        => _stateClient.DeleteManyAsync(_scanId!, _scanExecutionId, names, ct);
 
     // ── Serialization ────────────────────────────────────────────────────────
 
@@ -370,39 +244,6 @@ public sealed class ConnectorStateStorage : IStateStorage
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
-
-    private Dictionary<string, string> BuildCallerHeaders()
-    {
-        var headers = new Dictionary<string, string>();
-
-        if (_scanId is not null)
-        {
-            headers["Scan-Id"] = _scanId;
-        }
-
-        if (_scanExecutionId is not null)
-        {
-            headers["Scan-Execution-Id"] = _scanExecutionId;
-        }
-
-        headers["Function-Type"] = Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix";
-
-        var current = Activity.Current;
-        if (current is not null)
-        {
-            if (current.Id is not null)
-            {
-                headers["traceparent"] = current.Id;
-            }
-
-            if (!string.IsNullOrEmpty(current.TraceStateString))
-            {
-                headers["tracestate"] = current.TraceStateString;
-            }
-        }
-
-        return headers;
-    }
 
     private static bool MatchesPrefix(string key, string prefix)
     {

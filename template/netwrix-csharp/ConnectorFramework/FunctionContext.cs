@@ -139,6 +139,15 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
     public void SaveObject(string table, object obj, bool updateStatus = true)
         => GetTable(table).AddObject(obj, updateStatus);
 
+    /// <inheritdoc/>
+    public void FlushBuffers(CancellationToken ct = default)
+    {
+        foreach (var (_, bm) in _tables)
+        {
+            bm.FlushBuffer(ct);
+        }
+    }
+
     /// <summary>
     /// Flushes all active table batch managers. The framework calls this automatically
     /// after a job-mode invocation completes.

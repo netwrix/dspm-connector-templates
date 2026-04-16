@@ -51,7 +51,18 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
 
             if (isFinal)
             {
-                await _writer.FlushTablesAsync(CancellationToken.None);
+                // Non-closing buffer flush: pushes this worker's partial batch to ClickHouse
+                // immediately without closing the BatchManager channels. Required for incremental
+                // data visibility on long-running scans (hours/days/weeks).
+                //
+                // We deliberately do NOT call FlushTablesAsync (which closes channels) because
+                // CrawlRunOrchestrator runs N concurrent workers: each passes isFinal=true when
+                // its own task finishes, while other workers are still running. Closing channels
+                // here would corrupt writes from workers still queued behind _writeLock.
+                //
+                // The single closing flush is Handler.RunScanAsync after orchestrator.RunAsync():
+                //   await ctx.FlushTablesAsync(CancellationToken.None);
+                _writer.FlushBuffers(CancellationToken.None);
             }
         }
         finally
