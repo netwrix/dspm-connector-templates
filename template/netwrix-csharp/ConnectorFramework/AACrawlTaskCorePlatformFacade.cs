@@ -7,6 +7,7 @@ using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models.Api;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
 using Netwrix.Overlord.Sdk.Core.State.Models;
+using Netwrix.Overlord.Sdk.Orchestration;
 
 namespace Netwrix.ConnectorFramework;
 
@@ -28,9 +29,9 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     // passing the throttle check and issuing duplicate progress updates.
     private int _updateGuard;
 
+    private CrawlRunRequest? _crawlRunRequest;
     private CrawlTaskConfiguration.SourcePayload? _sourcePayload;
     private List<CrawlTaskConfiguration.ConnectorConfigPayload>? _connectorConfigs;
-
     public AACrawlTaskCorePlatformFacade(
         AACorePlatformFacade core,
         IScanProgress progress,
@@ -76,12 +77,17 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     /// Stores the request payloads deserialized from the connector request body.
     /// Must be called before <see cref="StartTask"/>.
     /// </summary>
+    /// <param name="source">Source payload from the connector request.</param>
+    /// <param name="configs">Connector config payloads from the connector request.</param>
     public void Initialize(
+        CrawlRunRequest request,
         CrawlTaskConfiguration.SourcePayload source,
         List<CrawlTaskConfiguration.ConnectorConfigPayload> configs)
     {
+        _crawlRunRequest = request;
         _sourcePayload = source;
         _connectorConfigs = configs;
+
     }
 
     public Task<CrawlTaskConfiguration> StartTask(Guid crawlTaskReference, DateTimeOffset startDate)
@@ -196,6 +202,8 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         var delta = totalItems - _reportedItemsCount;
         try
         {
+            await _core.UploadCrawlCompletion(_crawlRunRequest);
+
             await _progress.UpdateExecutionAsync(
                 status: ScanStatus.Completed,
                 incrementCompletedObjects: delta);
