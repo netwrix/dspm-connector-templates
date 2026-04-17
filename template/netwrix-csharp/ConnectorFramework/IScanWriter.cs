@@ -8,5 +8,12 @@ namespace Netwrix.ConnectorFramework;
 public interface IScanWriter
 {
     void SaveObject(string tableName, object obj, bool updateStatus = true);
+
+    /// <summary>
+    /// Drains in-memory buffers for all tables to the flush channel without closing channels.
+    /// Safe to call from concurrent workers — does not complete BatchManagers.
+    /// </summary>
+    void FlushBuffers(CancellationToken ct = default);
+
     Task FlushTablesAsync(CancellationToken ct = default);
 }

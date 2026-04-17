@@ -157,6 +157,9 @@ internal static class Program
             var handlerInstance = scope.ServiceProvider.GetRequiredService<IConnectorHandler>();
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
+            lifetime.ApplicationStopping.Register(() =>
+                logger.LogWarning("SIGTERM received — ApplicationStopping triggered; job will be cancelled"));
+
             isLongRunning = requestData.Execution.IsLongRunning;
 
             using (logger.BeginScope(new Dictionary<string, object?>
@@ -186,14 +189,25 @@ internal static class Program
                 }
                 await context.FlushTablesAsync();
 
+                // Write the result JSON to stdout so connector-api can capture it as logs.
+                var resultJson = JsonSerializer.Serialize(result);
+                Console.WriteLine(resultJson);
+
+                exitCode = DeriveExitCode(resultJson);
+
+                var metricStatus = exitCode == 0 ? "succeeded" : "failed";
                 ConnectorMetrics.ExecutionDuration.Record(
                     executionStopwatch.Elapsed.TotalSeconds,
-                    new KeyValuePair<string, object?>("status", "succeeded"));
+                    new KeyValuePair<string, object?>("status", metricStatus));
 
-                jobActivity?.SetStatus(ActivityStatusCode.Ok);
-
-                Console.WriteLine(JsonSerializer.Serialize(result));
-                exitCode = 0;
+                if (exitCode == 0)
+                {
+                    jobActivity?.SetStatus(ActivityStatusCode.Ok);
+                }
+                else
+                {
+                    jobActivity?.SetStatus(ActivityStatusCode.Error, "Handler returned error statusCode");
+                }
             }
         }
         catch (Exception ex)
@@ -277,6 +291,14 @@ internal static class Program
         // RedisSignalHandler accepts IConnectionMultiplexer? and degrades gracefully.
 
         services.AddHttpClient();
+        services.AddHttpClient<ConnectorStateClient>(ConnectorStateClient.HttpClientName, client =>
+        {
+            var url = ServiceUrlHelper.Resolve("CONNECTOR_STATE_FUNCTION", "connector-state");
+            client.BaseAddress = new Uri(url.TrimEnd('/') + "/");
+            client.DefaultRequestHeaders.TryAddWithoutValidation(
+                "Function-Type",
+                Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix");
+        });
         // Apply rate-limit tracking to every named HttpClient (including connector-developer clients).
         services.ConfigureAll<HttpClientFactoryOptions>(options =>
             options.HttpMessageHandlerBuilderActions.Add(
@@ -516,6 +538,22 @@ internal static class Program
         await request.Body.CopyToAsync(ms);
         request.Body.Position = 0;
         return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Derives the process exit code from the serialized result JSON returned by a connector handler.
+    /// Handlers signal failure by returning <see cref="FunctionContext.ErrorResponse"/>, which sets
+    /// <c>statusCode</c> to 400 (client error) or 500 (server error). Without this check the process
+    /// would always exit 0, causing connector-api — which evaluates job success solely via pod exit code
+    /// — to report a completed job even when the connector detected an error (e.g. the SPO connector
+    /// catching an Azure AD or certificate exception and returning ValidationResult.Error).
+    /// Returns 1 when <c>statusCode</c> ≥ 400, 0 otherwise (including when the field is absent).
+    /// </summary>
+    internal static int DeriveExitCode(string resultJson)
+    {
+        using var doc = JsonDocument.Parse(resultJson);
+        return doc.RootElement.TryGetProperty("statusCode", out var statusCodeEl)
+            && statusCodeEl.GetInt32() >= 400 ? 1 : 0;
     }
 
     internal static string BuildRequestPath()

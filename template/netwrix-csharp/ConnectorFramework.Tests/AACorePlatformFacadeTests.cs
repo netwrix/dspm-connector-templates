@@ -58,14 +58,47 @@ public class AACorePlatformFacadeTests
     }
 
     [Fact]
-    public async Task UploadSiTSchemaRecords_WhenIsFinalTrue_FlushesWriter()
+    public async Task UploadSiTSchemaRecords_IsFinalTrue_FlushesBuffersNotTables()
     {
+        // isFinal=true triggers a non-closing buffer flush for incremental ClickHouse writes,
+        // NOT the channel-closing FlushTablesAsync.
         var writerMock = WriterMock();
         var facade = CreateFacade(writerMock.Object);
 
         await facade.UploadSiTSchemaRecords(new CrawlContext(), "schema_table", [], isFinal: true);
 
-        writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+        writerMock.Verify(w => w.FlushBuffers(It.IsAny<CancellationToken>()), Times.Once);
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task UploadSiTSchemaRecords_IsFinalFalse_NeitherFlushes()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+
+        await facade.UploadSiTSchemaRecords(new CrawlContext(), "schema_table", [], isFinal: false);
+
+        writerMock.Verify(w => w.FlushBuffers(It.IsAny<CancellationToken>()), Times.Never);
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task UploadSiTSchemaRecords_ConcurrentCallsWithIsFinalTrue_SavesAllEntities()
+    {
+        // Regression: concurrent workers each passing isFinal=true must not close channels or
+        // cause data loss for workers still queued behind _writeLock.
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var entity = new JsonObject { ["id"] = "x" };
+
+        var tasks = Enumerable.Range(0, 10).Select(_ =>
+            facade.UploadSiTSchemaRecords(new CrawlContext(), "memberships", [entity], isFinal: true));
+
+        await Task.WhenAll(tasks);
+
+        writerMock.Verify(w => w.SaveObject("memberships", entity, true), Times.Exactly(10));
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
