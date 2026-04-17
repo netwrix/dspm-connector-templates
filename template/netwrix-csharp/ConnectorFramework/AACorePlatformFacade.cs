@@ -5,6 +5,7 @@ using Netwrix.Overlord.Sdk.Cloud;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
 using Netwrix.Overlord.Sdk.Core.State.Models;
+using Netwrix.Overlord.Sdk.Orchestration;
 
 namespace Netwrix.ConnectorFramework;
 
@@ -117,5 +118,32 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
     {
         throw new NotSupportedException(
             "Upload of graph based State in Time Records is not supported in Access Analyzer connectors.");
+    }
+
+    public async Task UploadCrawlCompletion(
+        CrawlRunRequest? crawlRunRequest)
+    {
+        ArgumentNullException.ThrowIfNull(crawlRunRequest);
+
+        var completedAt = DateTimeOffset.UtcNow;
+        await _writeLock.WaitAsync();
+        try
+        {
+            foreach (var connectorReference in crawlRunRequest.ConnectorReferences)
+            {
+                _writer.SaveObject("crawl_completions", new
+                {
+                    tenancyReference = crawlRunRequest.TenancyReference,
+                    connectorReference,
+                    crawlRunRequest.FullCrawlTimestampUtc,
+                    completedAt,
+                }, updateStatus: false);
+            }
+            await _writer.FlushTablesAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 }
