@@ -132,6 +132,59 @@ public class AACorePlatformFacadeTests
         Assert.Equal("t-1", result.GetProperty("tenantId").GetString());
     }
 
+    // ── UploadCrawlCompletion ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task UploadCrawlCompletion_SavesOneRowPerConnectorReference()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var connectorRef1 = Guid.NewGuid();
+        var connectorRef2 = Guid.NewGuid();
+        var context = new CrawlContext
+        {
+            TenancyReference = Guid.NewGuid(),
+            ConnectorReferences = [connectorRef1, connectorRef2],
+        };
+
+        await facade.UploadCrawlCompletion(context);
+
+        writerMock.Verify(w => w.SaveObject("crawl_completions", It.IsAny<object>(), false), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task UploadCrawlCompletion_FlushesAfterSaving()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var context = new CrawlContext
+        {
+            TenancyReference = Guid.NewGuid(),
+            ConnectorReferences = [Guid.NewGuid()],
+        };
+
+        await facade.UploadCrawlCompletion(context);
+
+        writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+    }
+
+    [Fact]
+    public async Task UploadCrawlCompletion_EmptyConnectorReferences_SavesNoRowsButStillFlushes()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var context = new CrawlContext
+        {
+            TenancyReference = Guid.NewGuid(),
+            ConnectorReferences = [],
+        };
+
+        await facade.UploadCrawlCompletion(context);
+
+        writerMock.Verify(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()), Times.Never);
+        writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+    }
+
     // ── DecryptServiceBusMessage ─────────────────────────────────────────────
 
     [Fact]
