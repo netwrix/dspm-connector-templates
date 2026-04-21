@@ -28,6 +28,7 @@ internal static class EnvironmentVariables
     internal const string SecretMappings = "SECRET_MAPPINGS";
 
     // Observability
+    internal const string ImageVersion = "IMAGE_VERSION";
     internal const string OtelEnabled = "OTEL_ENABLED";
     internal const string OtelExporterOtlpEndpoint = "OTEL_EXPORTER_OTLP_ENDPOINT";
     internal const string Environment = "ENVIRONMENT";

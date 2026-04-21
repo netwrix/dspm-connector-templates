@@ -5,6 +5,7 @@ ARG UPGRADE_PACKAGES
 ARG ADDITIONAL_PACKAGE
 ARG DEBUG_MODE="false"
 ARG FUNCTION_DIR
+ARG IMAGE_VERSION=dev
 
 RUN --mount=type=cache,target=/var/cache/apk \
     if [ "${UPGRADE_PACKAGES}" = "true" ] || [ "${UPGRADE_PACKAGES}" = "1" ]; then apk upgrade; fi && \
@@ -30,7 +31,8 @@ ENV PATH=/opt/venv/bin:$PATH:/home/app/.local/bin \
     DEBUG_MODE=${DEBUG_MODE} \
     DEBUG_PORT=5678 \
     DEBUG_HOST="0.0.0.0" \
-    PYDEVD_DISABLE_FILE_VALIDATION=1
+    PYDEVD_DISABLE_FILE_VALIDATION=1 \
+    IMAGE_VERSION=${IMAGE_VERSION}
 
 # Template specific steps
 WORKDIR /home/app/

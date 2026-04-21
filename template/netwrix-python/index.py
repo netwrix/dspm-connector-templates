@@ -110,6 +110,7 @@ def setup_opentelemetry(flask_app: object | None = None) -> Callable[[], None]:
                 "service.name": SERVICE_NAME,
                 "service.namespace": "dspm-connectors",
                 "deployment.environment": os.getenv("ENVIRONMENT", "development"),
+                "service.version": os.getenv("IMAGE_VERSION", "unknown"),
             }
         )
 

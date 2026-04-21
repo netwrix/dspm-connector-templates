@@ -52,6 +52,14 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
             ["source_type"] = request.Execution.SourceType,
             ["source_id"] = request.Execution.SourceId,
         });
+
+        if (request.Body is { Length: > 0 } bodyBytes)
+        {
+            var bodyText = System.Text.Encoding.UTF8.GetString(bodyBytes)
+                .Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Replace("\n", string.Empty, StringComparison.Ordinal);
+            _logger.LogInformation("Request body {Path} {Body}", request.Path, bodyText);
+        }
     }
 
     // ── Secrets ───────────────────────────────────────────────────────────────
