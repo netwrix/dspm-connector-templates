@@ -1,5 +1,6 @@
 ARG FUNCTION_DIR
 ARG NUGET_TOKEN
+ARG IMAGE_VERSION=dev
 
 FROM --platform=${TARGETPLATFORM:-linux/amd64} mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
 
@@ -7,6 +8,7 @@ FROM --platform=${TARGETPLATFORM:-linux/amd64} mcr.microsoft.com/dotnet/sdk:8.0-
 ARG FUNCTION_DIR
 ARG NUGET_TOKEN
 ARG UPGRADE_PACKAGES
+ARG IMAGE_VERSION=dev
 # Promote to ENV so NuGet.config's %NUGET_TOKEN% substitution can read it at restore time.
 ENV NUGET_TOKEN=${NUGET_TOKEN}
 
@@ -58,6 +60,8 @@ USER app
 WORKDIR /app
 COPY --from=build --chown=app:app /app .
 
+ARG IMAGE_VERSION=dev
+ENV IMAGE_VERSION=${IMAGE_VERSION}
 ENV ASPNETCORE_URLS=""
 ENV PORT=5000
 
