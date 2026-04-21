@@ -398,6 +398,7 @@ internal static class Program
             {
                 ["service.namespace"] = "dspm-connectors",
                 ["deployment.environment"] = environment,
+                ["service.version"] = Environment.GetEnvironmentVariable(EnvironmentVariables.ImageVersion) ?? "unknown",
                 // Execution context — allows Prometheus to correlate all metrics from
                 // this connector process with a specific scan execution.
                 ["scan_execution_id"] = Environment.GetEnvironmentVariable(EnvironmentVariables.ScanExecutionId) ?? "",
