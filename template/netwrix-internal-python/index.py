@@ -165,21 +165,34 @@ from function import handler  # noqa: E402
 
 class Event:
     def __init__(self, execution_mode: str = "http"):
+        self._execution_mode = execution_mode
+        self._body = None
         if execution_mode == "http":
-            # Http mode: read from Flask request
-            self.body = request.get_data()
             self.headers = request.headers
             self.method = request.method
             self.query = request.args
             self.path = request.path
         else:
             # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
-            request_data = os.getenv("REQUEST_DATA", "{}")
-            self.body = request_data.encode()
+            self._body = os.getenv("REQUEST_DATA", "{}").encode()
             self.headers = {}
             self.method = "POST"
             self.query = {}
             self.path = "/"
+
+    @property
+    def body(self):
+        if self._body is None:
+            self._body = request.get_data()
+        return self._body
+
+    @property
+    def stream(self):
+        if self._body is not None:
+            raise RuntimeError("Cannot access stream after body has been read")
+        if self._execution_mode != "http":
+            raise RuntimeError("Stream is only available in http mode")
+        return request.stream
 
 
 class Context:
@@ -260,16 +273,19 @@ class Context:
             raise ValueError("data must be a dictionary")
 
         try:
-            payload = {"scanId": self.scan_id, "data": data}
-
-            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+            headers = {**self.get_caller_headers()}
 
             service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
             url = get_service_url(service_name)
 
+            # Send as multipart form: each key-value pair is a part,
+            # scanId is a query parameter.
+            files = {name: (None, str(value) if value is not None else "") for name, value in data.items()}
+
             response = requests.post(
                 url,
-                json=payload,
+                params={"scanId": self.scan_id},
+                files=files,
                 headers=headers,
                 timeout=30,
             )
