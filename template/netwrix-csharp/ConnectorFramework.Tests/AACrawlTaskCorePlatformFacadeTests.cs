@@ -3,6 +3,7 @@ using System.Reflection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
+using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models.Api;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
 using Xunit;
 
@@ -130,6 +131,59 @@ public class AACrawlTaskCorePlatformFacadeTests
 
         progressMock.Verify(p => p.UpdateExecutionAsync(
             ScanStatus.Completed,
+            null,
+            null,
+            null,
+            It.IsAny<int>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task FinalizeScan_NoErrors_ReturnsCompleted()
+    {
+        var facade = CreateFacade();
+
+        var result = await facade.FinalizeScan();
+
+        Assert.Equal(ScanStatus.Completed, result);
+    }
+
+    [Fact]
+    public async Task FinalizeScan_WithErrors_ReturnsCompletedWithErrors()
+    {
+        var facade = CreateFacade();
+        var taskRef = Guid.NewGuid();
+        await facade.FinaliseTask(new APICrawlTaskProgress
+        {
+            TenancyId = Guid.NewGuid(),
+            CrawlTaskReference = taskRef,
+            UpdateType = CrawlTaskUpdateType.Complete,
+            CrawlTaskResults = [new ApiCrawlTaskResult { ConnectorReference = Guid.NewGuid(), ItemErrorCount = 3 }],
+        });
+
+        var result = await facade.FinalizeScan();
+
+        Assert.Equal(ScanStatus.CompletedWithErrors, result);
+    }
+
+    [Fact]
+    public async Task FinalizeScan_WithErrors_CallsUpdateExecutionWithCompletedWithErrors()
+    {
+        var progressMock = ProgressMock();
+        var facade = CreateFacade(progress: progressMock.Object);
+        var taskRef = Guid.NewGuid();
+        await facade.FinaliseTask(new APICrawlTaskProgress
+        {
+            TenancyId = Guid.NewGuid(),
+            CrawlTaskReference = taskRef,
+            UpdateType = CrawlTaskUpdateType.Complete,
+            CrawlTaskResults = [new ApiCrawlTaskResult { ConnectorReference = Guid.NewGuid(), ItemErrorCount = 2 }],
+        });
+
+        await facade.FinalizeScan();
+
+        progressMock.Verify(p => p.UpdateExecutionAsync(
+            ScanStatus.CompletedWithErrors,
             null,
             null,
             null,
