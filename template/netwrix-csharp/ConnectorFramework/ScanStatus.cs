@@ -10,4 +10,5 @@ public static class ScanStatus
     public const string Pausing = "pausing";
     public const string Resuming = "resuming";
     public const string Stopping = "stopping";
+    public const string CompletedWithErrors = "completed_with_errors";
 }

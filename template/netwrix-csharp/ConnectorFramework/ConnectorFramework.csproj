@@ -22,6 +22,9 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
       <_Parameter1>SharepointOnline.Tests</_Parameter1>
     </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>EntraId.Sync.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>
@@ -36,6 +39,7 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.9.*" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.9.*" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="8.*" />
     <!-- Pin to 9.0.x so ConnectorFramework.deps.json satisfies connectors that require System.Text.Json 9.0.0.0 -->
     <PackageReference Include="System.Text.Json" Version="9.0.*" />
     <PackageReference Include="System.Text.Encodings.Web" Version="9.0.*" />

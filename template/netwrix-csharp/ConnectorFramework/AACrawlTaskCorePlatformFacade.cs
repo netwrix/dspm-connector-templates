@@ -23,6 +23,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
     private readonly ConcurrentDictionary<Guid, long> _taskStartTimestamps = new();
     private int _reportedItemsCount;
+    private int _totalErrors;
     private long _lastUpdateTimestamp = Stopwatch.GetTimestamp();
     // CAS guard: 0 = idle, 1 = updating. Prevents two concurrent callers from both
     // passing the throttle check and issuing duplicate progress updates.
@@ -181,6 +182,13 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             }
         }
 
+        // Accumulate errors into the scan-level total before removing the per-task entry.
+        var taskErrors = taskProgress.CrawlTaskResults?.Sum(x => x.ItemErrorCount) ?? 0;
+        if (taskErrors > 0)
+        {
+            Interlocked.Add(ref _totalErrors, taskErrors);
+        }
+
         // Remove the finalized task's entries to prevent unbounded memory growth
         // on long-running connectors with many child tasks.
         _processedItems.TryRemove(taskProgress.CrawlTaskReference, out _);
@@ -189,15 +197,16 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         return Task.CompletedTask;
     }
 
-    public async Task FinalizeScan()
+    public async Task<string> FinalizeScan()
     {
         using var activity = _progress.StartActivity("finalize-scan");
         var totalItems = _processedItems.Values.Sum();
         var delta = totalItems - _reportedItemsCount;
+        var status = _totalErrors > 0 ? ScanStatus.CompletedWithErrors : ScanStatus.Completed;
         try
         {
             await _progress.UpdateExecutionAsync(
-                status: ScanStatus.Completed,
+                status: status,
                 incrementCompletedObjects: delta);
         }
         catch (Exception ex)
@@ -208,5 +217,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             // rather than silently completing with an unknown status.
             throw;
         }
+        return status;
     }
 }
