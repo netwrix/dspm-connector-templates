@@ -77,7 +77,12 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
     {
         var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var basePath in new[] { "/var/secrets", "/var/openfaas/secrets" })
+        var secretsBasePath = Environment.GetEnvironmentVariable("SECRETS_BASE_PATH");
+        var searchPaths = secretsBasePath is not null
+            ? new[] { secretsBasePath }
+            : new[] { "/var/secrets", "/var/openfaas/secrets" };
+
+        foreach (var basePath in searchPaths)
         {
             if (!Directory.Exists(basePath))
             {
