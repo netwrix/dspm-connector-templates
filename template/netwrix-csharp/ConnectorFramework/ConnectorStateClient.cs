@@ -42,15 +42,15 @@ public sealed class ConnectorStateClient
 
         try
         {
-            using var response = await _client.SendAsync(request, ct);
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!response.IsSuccessStatusCode)
             {
                 throw new StateStorageException(
                     $"connector-state GET returned {(int)response.StatusCode}");
             }
 
-            var body = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(body);
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
             var root = doc.RootElement;
 
             if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
@@ -67,6 +67,57 @@ public sealed class ConnectorStateClient
             }
 
             return new Dictionary<string, string>();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (StateStorageException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "connector-state GET failed for scan {ScanId}", scanId);
+            throw new StateStorageException($"connector-state GET failed for scan {scanId}", ex);
+        }
+    }
+
+    public async Task<string?> GetStateValueAsync(
+        string scanId, string? scanExecutionId, string key, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"?scanId={Uri.EscapeDataString(scanId)}");
+        AddPerRequestHeaders(request, scanId, scanExecutionId);
+
+        try
+        {
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new StateStorageException(
+                    $"connector-state GET returned {(int)response.StatusCode}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
+            {
+                var error = root.TryGetProperty("error", out var errProp)
+                    ? errProp.GetString() : "Unknown error";
+                throw new StateStorageException($"connector-state GET failed: {error}");
+            }
+
+            if (root.TryGetProperty("data", out var dataProp) &&
+                dataProp.TryGetProperty(key, out var valueProp))
+            {
+                return valueProp.GetString();
+            }
+
+            return null;
         }
         catch (OperationCanceledException)
         {

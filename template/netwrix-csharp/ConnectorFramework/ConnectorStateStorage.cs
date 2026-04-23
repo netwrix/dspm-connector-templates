@@ -56,9 +56,9 @@ public sealed class ConnectorStateStorage : IStateStorage
             return TryGetResult<T>.NotFound;
         }
 
-        var allState = await FetchAllStateAsync(cancellationToken);
+        var json = await _stateClient.GetStateValueAsync(_scanId, _scanExecutionId, key, cancellationToken);
 
-        if (!allState.TryGetValue(key, out var json))
+        if (json is null)
         {
             return TryGetResult<T>.NotFound;
         }
