@@ -8,13 +8,14 @@ public sealed class StateManager : IAsyncDisposable
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> ValidTransitions =
         new Dictionary<string, IReadOnlyList<string>>
         {
-            [ScanStatus.Running] = [ScanStatus.Stopping, ScanStatus.Pausing, ScanStatus.Completed, ScanStatus.Failed],
+            [ScanStatus.Running] = [ScanStatus.Stopping, ScanStatus.Pausing, ScanStatus.Completed, ScanStatus.CompletedWithErrors, ScanStatus.Failed],
             [ScanStatus.Stopping] = [ScanStatus.Stopped, ScanStatus.Failed],
             [ScanStatus.Stopped] = [],
             [ScanStatus.Pausing] = [ScanStatus.Paused, ScanStatus.Failed],
             [ScanStatus.Paused] = [ScanStatus.Resuming, ScanStatus.Failed, ScanStatus.Stopped],
             [ScanStatus.Resuming] = [ScanStatus.Running, ScanStatus.Failed],
             [ScanStatus.Completed] = [],
+            [ScanStatus.CompletedWithErrors] = [],
             [ScanStatus.Failed] = [],
         };
 
