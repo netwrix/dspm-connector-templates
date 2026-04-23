@@ -468,4 +468,86 @@ public class ConnectorStateStorageTests
         Assert.Equal(new[] { "src/tenant/bookmark" }, depth1.ToArray());
         Assert.Equal(new[] { "src/tenant/other/bookmark", "src/tenant/site/bookmark", "src/tenant/site/cursor" }, depth2.ToArray());
     }
+
+    // ── TryGetAsync per-key path ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task TryGetAsync_IssuesExactlyOneHttpCall()
+    {
+        var stateData = new Dictionary<string, string> { ["k"] = "\"v\"" };
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>((_, _) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
+                }));
+        var storage = CreateStorage(CreateClient(handlerMock.Object));
+
+        await storage.TryGetAsync<string>("k");
+
+        handlerMock.Protected().Verify(
+            "SendAsync", Times.Once(),
+            ItExpr.IsAny<HttpRequestMessage>(),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TryGetAsync_AndDeleteAllAsync_IssueIndependentGets()
+    {
+        var stateData = new Dictionary<string, string>
+        {
+            ["prefix/a"] = "\"v\"",
+            ["prefix/b"] = "\"v\"",
+        };
+        var getCount = 0;
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>((req, _) =>
+            {
+                if (req.Method == HttpMethod.Get)
+                {
+                    getCount++;
+                }
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
+                });
+            });
+        var storage = CreateStorage(CreateClient(handlerMock.Object));
+
+        await storage.TryGetAsync<string>("prefix/a");
+        await storage.DeleteAllAsync("prefix");
+
+        Assert.Equal(2, getCount);
+    }
+
+    // ── GetStateValueAsync ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetStateValueAsync_ReturnsNull_WhenKeyAbsent()
+    {
+        var stateData = new Dictionary<string, string> { ["other"] = "\"v\"" };
+        var client = CreateClient(StateResponse(stateData));
+
+        var result = await client.GetStateValueAsync("scan-id", null, "missing", CancellationToken.None);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetStateValueAsync_ThrowsStorageException_OnHttpError()
+    {
+        var client = CreateClient("{}", HttpStatusCode.InternalServerError);
+
+        await Assert.ThrowsAsync<StateStorageException>(
+            () => client.GetStateValueAsync("scan-id", null, "key", CancellationToken.None));
+    }
 }
