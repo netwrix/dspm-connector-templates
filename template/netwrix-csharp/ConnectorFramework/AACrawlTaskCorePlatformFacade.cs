@@ -18,7 +18,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     private readonly IScanProgress _progress;
     private readonly ILogger<AACrawlTaskCorePlatformFacade> _logger;
 
-    private readonly ConcurrentQueue<ApiChildCrawlTask> _crawlTaskQueue = new();
     private readonly ConcurrentDictionary<Guid, int> _processedItems = new();
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
     private readonly ConcurrentDictionary<Guid, long> _taskStartTimestamps = new();
@@ -65,12 +64,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         => _core.UploadActivityRecords(activityRecords);
 
     // ── ICrawlTaskManagementPlatformFacade ────────────────────────────────────
-
-    /// <summary>
-    /// Exposes the queue of child crawl tasks enqueued during <see cref="FinaliseTask"/>.
-    /// Drain this queue after the scan loop completes to schedule sub-tasks.
-    /// </summary>
-    public ConcurrentQueue<ApiChildCrawlTask> CrawlTaskQueue => _crawlTaskQueue;
 
     /// <summary>
     /// Stores the request payloads deserialized from the connector request body.
@@ -166,20 +159,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             ConnectorMetrics.TaskDuration.Record(Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
         }
         ConnectorMetrics.TasksCompleted.Add(1);
-
-        if (taskProgress.ChildTasks is null)
-        {
-            _logger.LogDebug(
-                "FinaliseTask: leaf task {CrawlTaskReference} completed — no children to enqueue",
-                taskProgress.CrawlTaskReference);
-        }
-        else
-        {
-            foreach (var childTask in taskProgress.ChildTasks)
-            {
-                _crawlTaskQueue.Enqueue(childTask);
-            }
-        }
 
         // Remove the finalized task's entries to prevent unbounded memory growth
         // on long-running connectors with many child tasks.
