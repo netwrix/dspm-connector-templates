@@ -35,6 +35,33 @@ public sealed class ConnectorStateClient
     public async Task<Dictionary<string, string>> GetStateAsync(
         string scanId, string? scanExecutionId, CancellationToken ct)
     {
+        using var doc = await OpenStateDocumentAsync(scanId, scanExecutionId, ct);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("data", out var dataProp))
+        {
+            return dataProp.Deserialize<Dictionary<string, string>>() ?? new Dictionary<string, string>();
+        }
+
+        return new Dictionary<string, string>();
+    }
+
+    public async Task<string?> GetStateValueAsync(
+        string scanId, string? scanExecutionId, string key, CancellationToken ct)
+    {
+        using var doc = await OpenStateDocumentAsync(scanId, scanExecutionId, ct);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("data", out var dataProp) &&
+            dataProp.TryGetProperty(key, out var valueProp))
+        {
+            return valueProp.GetString();
+        }
+
+        return null;
+    }
+
+    private async Task<JsonDocument> OpenStateDocumentAsync(
+        string scanId, string? scanExecutionId, CancellationToken ct)
+    {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             $"?scanId={Uri.EscapeDataString(scanId)}");
@@ -42,31 +69,26 @@ public sealed class ConnectorStateClient
 
         try
         {
-            using var response = await _client.SendAsync(request, ct);
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!response.IsSuccessStatusCode)
             {
                 throw new StateStorageException(
                     $"connector-state GET returned {(int)response.StatusCode}");
             }
 
-            var body = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(body);
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
             var root = doc.RootElement;
 
             if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
             {
+                doc.Dispose();
                 var error = root.TryGetProperty("error", out var errProp)
                     ? errProp.GetString() : "Unknown error";
                 throw new StateStorageException($"connector-state GET failed: {error}");
             }
 
-            if (root.TryGetProperty("data", out var dataProp))
-            {
-                return dataProp.Deserialize<Dictionary<string, string>>()
-                       ?? new Dictionary<string, string>();
-            }
-
-            return new Dictionary<string, string>();
+            return doc;
         }
         catch (OperationCanceledException)
         {
