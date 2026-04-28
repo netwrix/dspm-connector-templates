@@ -35,56 +35,32 @@ public sealed class ConnectorStateClient
     public async Task<Dictionary<string, string>> GetStateAsync(
         string scanId, string? scanExecutionId, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"?scanId={Uri.EscapeDataString(scanId)}");
-        AddPerRequestHeaders(request, scanId, scanExecutionId);
-
-        try
+        using var doc = await OpenStateDocumentAsync(scanId, scanExecutionId, ct);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("data", out var dataProp))
         {
-            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new StateStorageException(
-                    $"connector-state GET returned {(int)response.StatusCode}");
-            }
-
-            await using var stream = await response.Content.ReadAsStreamAsync(ct);
-            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
-            {
-                var error = root.TryGetProperty("error", out var errProp)
-                    ? errProp.GetString() : "Unknown error";
-                throw new StateStorageException($"connector-state GET failed: {error}");
-            }
-
-            if (root.TryGetProperty("data", out var dataProp))
-            {
-                return dataProp.Deserialize<Dictionary<string, string>>()
-                       ?? new Dictionary<string, string>();
-            }
-
-            return new Dictionary<string, string>();
+            return dataProp.Deserialize<Dictionary<string, string>>() ?? new Dictionary<string, string>();
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (StateStorageException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "connector-state GET failed for scan {ScanId}", scanId);
-            throw new StateStorageException($"connector-state GET failed for scan {scanId}", ex);
-        }
+
+        return new Dictionary<string, string>();
     }
 
     public async Task<string?> GetStateValueAsync(
         string scanId, string? scanExecutionId, string key, CancellationToken ct)
+    {
+        using var doc = await OpenStateDocumentAsync(scanId, scanExecutionId, ct);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("data", out var dataProp) &&
+            dataProp.TryGetProperty(key, out var valueProp))
+        {
+            return valueProp.GetString();
+        }
+
+        return null;
+    }
+
+    private async Task<JsonDocument> OpenStateDocumentAsync(
+        string scanId, string? scanExecutionId, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
@@ -101,23 +77,18 @@ public sealed class ConnectorStateClient
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
-            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
             var root = doc.RootElement;
 
             if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
             {
+                doc.Dispose();
                 var error = root.TryGetProperty("error", out var errProp)
                     ? errProp.GetString() : "Unknown error";
                 throw new StateStorageException($"connector-state GET failed: {error}");
             }
 
-            if (root.TryGetProperty("data", out var dataProp) &&
-                dataProp.TryGetProperty(key, out var valueProp))
-            {
-                return valueProp.GetString();
-            }
-
-            return null;
+            return doc;
         }
         catch (OperationCanceledException)
         {
