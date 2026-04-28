@@ -157,9 +157,6 @@ internal static class Program
             var handlerInstance = scope.ServiceProvider.GetRequiredService<IConnectorHandler>();
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
-            lifetime.ApplicationStopping.Register(() =>
-                logger.LogWarning("SIGTERM received — ApplicationStopping triggered; job will be cancelled"));
-
             isLongRunning = requestData.Execution.IsLongRunning;
 
             using (logger.BeginScope(new Dictionary<string, object?>
@@ -184,6 +181,8 @@ internal static class Program
 
                 object result;
                 using (var handleActivity = ActivitySource.StartActivity("handle_request"))
+                using (lifetime.ApplicationStopping.Register(() =>
+                    logger.LogWarning("SIGTERM received — ApplicationStopping triggered; job will be cancelled")))
                 {
                     result = await handlerInstance.HandleJobAsync(requestData, context, lifetime.ApplicationStopping);
                 }
