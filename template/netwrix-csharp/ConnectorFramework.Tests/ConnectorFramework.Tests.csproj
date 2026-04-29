@@ -31,6 +31,8 @@
     <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.14-preview" />
     <PackageReference Include="Netwrix.Overlord.Sdk.Orchestration" Version="2.0.0.14-preview" />
     <PackageReference Include="Microsoft.Extensions.Resilience" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
+    <PackageReference Include="Testcontainers.Redis" Version="3.*" />
   </ItemGroup>
 
 </Project>
