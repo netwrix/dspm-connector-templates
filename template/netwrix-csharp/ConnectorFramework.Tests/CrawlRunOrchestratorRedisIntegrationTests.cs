@@ -6,6 +6,7 @@ using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Crawling;
 using Netwrix.Overlord.Sdk.Orchestration;
 using StackExchange.Redis;
+using System.Net.Sockets;
 using System.Text.Json;
 using Testcontainers.Redis;
 using Xunit;
@@ -29,7 +30,30 @@ public sealed class CrawlRunOrchestratorRedisIntegrationTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await _redisContainer.StartAsync();
+        // On Rancher Desktop (Lima VM), port forwarding to the macOS host takes a few seconds
+        // after the container's own ready check passes. Poll until the TCP port is reachable.
+        await WaitForTcpPortAsync(_redisContainer.GetConnectionString());
         _redis = ConnectionMultiplexer.Connect(_redisContainer.GetConnectionString());
+    }
+
+    private static async Task WaitForTcpPortAsync(string connectionString, int timeoutSeconds = 10)
+    {
+        var cfg = ConfigurationOptions.Parse(connectionString);
+        var ep = (System.Net.IPEndPoint)cfg.EndPoints[0];
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+        while (true)
+        {
+            try
+            {
+                using var tcp = new TcpClient();
+                await tcp.ConnectAsync(ep.Address, ep.Port, deadline.Token);
+                return;
+            }
+            catch (Exception) when (!deadline.IsCancellationRequested)
+            {
+                await Task.Delay(200, deadline.Token);
+            }
+        }
     }
 
     public async Task DisposeAsync()
