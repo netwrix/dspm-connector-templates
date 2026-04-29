@@ -30,7 +30,8 @@ internal static class OrchestratorTestHarness
     public static ServiceProvider BuildContainer(
         TestCrawlTaskProcessorFactory processorFactory,
         InMemoryRunStateStorageFactory stateStorageFactory,
-        ICrawlRunSignalSource? signalSource = null)
+        ICrawlRunSignalSource? signalSource = null,
+        Action<CrawlRunOrchestratorOptions>? configureOptions = null)
     {
         var services = new ServiceCollection();
         var emptyConfig = new ConfigurationBuilder().Build();
@@ -50,6 +51,7 @@ internal static class OrchestratorTestHarness
             o.MaxAuthRetryAttempts = 1;
             o.MaxHashMismatchAttempts = 1;
             o.ConfigCacheTtl = TimeSpan.FromMinutes(5);
+            configureOptions?.Invoke(o);
         });
 
         services.AddSingleton<IRunStateStorageFactory>(stateStorageFactory);
