@@ -297,7 +297,24 @@ internal static class Program
             client.DefaultRequestHeaders.TryAddWithoutValidation(
                 "Function-Type",
                 Environment.GetEnvironmentVariable("FUNCTION_TYPE") ?? "netwrix");
+        })
+        .AddStandardResilienceHandler(o =>
+        {
+            // Raise the circuit-breaker threshold: an open circuit during a pause-snapshot write
+            // is worse than a transient failure — it suppresses all retries for the sampling window.
+            o.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+            o.CircuitBreaker.MinimumThroughput = 10;
         });
+
+        services.AddHttpClient(ServiceNames.DataIngestion)
+            .AddStandardResilienceHandler();
+
+        services.AddHttpClient(ServiceNames.UpdateExecution)
+            .AddStandardResilienceHandler();
+
+        services.AddHttpClient(ServiceNames.AppDataQuery)
+            .AddStandardResilienceHandler();
+
         // Apply rate-limit tracking to every named HttpClient (including connector-developer clients).
         services.ConfigureAll<HttpClientFactoryOptions>(options =>
             options.HttpMessageHandlerBuilderActions.Add(
