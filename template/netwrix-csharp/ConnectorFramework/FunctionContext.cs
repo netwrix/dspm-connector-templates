@@ -8,7 +8,7 @@ namespace Netwrix.ConnectorFramework;
 /// Per-request context provided to every connector operation.
 /// Injected by the framework via DI (Scoped lifetime).
 /// </summary>
-public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposable
+public sealed class FunctionContext : IFunctionContext, IScanWriter, IScanProgress, IAsyncDisposable
 {
     private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
 
