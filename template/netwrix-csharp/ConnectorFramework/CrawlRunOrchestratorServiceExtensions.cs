@@ -16,18 +16,38 @@ public static class CrawlRunOrchestratorServiceExtensions
     public static void ApplyOrchestratorEnvVarOverrides(CrawlRunOrchestratorOptions opts)
     {
         if (int.TryParse(Environment.GetEnvironmentVariable("MAX_WORKERS"), out var v))
+        {
             opts.MaxWorkers = v;
+        }
+
         if (int.TryParse(Environment.GetEnvironmentVariable("MAX_CONCURRENCY_PER_SOURCE"), out v))
+        {
             opts.MaxConcurrencyPerSource = v;
+        }
+
         if (int.TryParse(Environment.GetEnvironmentVariable("MAX_ATTEMPTS"), out v))
+        {
             opts.MaxAttempts = v;
+        }
+
         if (int.TryParse(Environment.GetEnvironmentVariable("MAX_AUTH_RETRY_ATTEMPTS"), out v))
+        {
             opts.MaxAuthRetryAttempts = v;
+        }
+
         if (int.TryParse(Environment.GetEnvironmentVariable("MAX_HASH_MISMATCH_ATTEMPTS"), out v))
+        {
             opts.MaxHashMismatchAttempts = v;
+        }
+
         if (int.TryParse(Environment.GetEnvironmentVariable("MAX_QUEUE_DEPTH"), out v))
+        {
             opts.MaxQueueDepth = v;
+        }
+
         if (int.TryParse(Environment.GetEnvironmentVariable("CONFIG_CACHE_TTL_MINUTES"), out v))
+        {
             opts.ConfigCacheTtl = TimeSpan.FromMinutes(v);
+        }
     }
 }
