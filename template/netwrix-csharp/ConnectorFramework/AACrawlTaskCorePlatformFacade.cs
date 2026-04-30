@@ -19,11 +19,11 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     private readonly IScanProgress _progress;
     private readonly ILogger<AACrawlTaskCorePlatformFacade> _logger;
 
-    private readonly ConcurrentQueue<ApiChildCrawlTask> _crawlTaskQueue = new();
     private readonly ConcurrentDictionary<Guid, int> _processedItems = new();
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
     private readonly ConcurrentDictionary<Guid, long> _taskStartTimestamps = new();
     private int _reportedItemsCount;
+    private int _totalErrors;
     private long _lastUpdateTimestamp = Stopwatch.GetTimestamp();
     // CAS guard: 0 = idle, 1 = updating. Prevents two concurrent callers from both
     // passing the throttle check and issuing duplicate progress updates.
@@ -66,12 +66,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         => _core.UploadActivityRecords(activityRecords);
 
     // ── ICrawlTaskManagementPlatformFacade ────────────────────────────────────
-
-    /// <summary>
-    /// Exposes the queue of child crawl tasks enqueued during <see cref="FinaliseTask"/>.
-    /// Drain this queue after the scan loop completes to schedule sub-tasks.
-    /// </summary>
-    public ConcurrentQueue<ApiChildCrawlTask> CrawlTaskQueue => _crawlTaskQueue;
 
     /// <summary>
     /// Stores the request payloads deserialized from the connector request body.
@@ -173,18 +167,11 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         }
         ConnectorMetrics.TasksCompleted.Add(1);
 
-        if (taskProgress.ChildTasks is null)
+        // Accumulate errors into the scan-level total before removing the per-task entry.
+        var taskErrors = taskProgress.CrawlTaskResults?.Sum(x => x.ItemErrorCount) ?? 0;
+        if (taskErrors > 0)
         {
-            _logger.LogDebug(
-                "FinaliseTask: leaf task {CrawlTaskReference} completed — no children to enqueue",
-                taskProgress.CrawlTaskReference);
-        }
-        else
-        {
-            foreach (var childTask in taskProgress.ChildTasks)
-            {
-                _crawlTaskQueue.Enqueue(childTask);
-            }
+            Interlocked.Add(ref _totalErrors, taskErrors);
         }
 
         // Remove the finalized task's entries to prevent unbounded memory growth
@@ -195,17 +182,18 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         return Task.CompletedTask;
     }
 
-    public async Task FinalizeScan()
+    public async Task<string> FinalizeScan()
     {
         using var activity = _progress.StartActivity("finalize-scan");
         var totalItems = _processedItems.Values.Sum();
         var delta = totalItems - _reportedItemsCount;
+        var status = _totalErrors > 0 ? ScanStatus.CompletedWithErrors : ScanStatus.Completed;
         try
         {
             await _core.UploadCrawlCompletion(_crawlRunRequest);
 
             await _progress.UpdateExecutionAsync(
-                status: ScanStatus.Completed,
+                status: status,
                 incrementCompletedObjects: delta);
         }
         catch (Exception ex)
@@ -216,5 +204,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             // rather than silently completing with an unknown status.
             throw;
         }
+        return status;
     }
 }

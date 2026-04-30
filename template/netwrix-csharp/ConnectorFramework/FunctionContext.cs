@@ -8,7 +8,7 @@ namespace Netwrix.ConnectorFramework;
 /// Per-request context provided to every connector operation.
 /// Injected by the framework via DI (Scoped lifetime).
 /// </summary>
-public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposable
+public sealed class FunctionContext : IFunctionContext, IScanWriter, IScanProgress, IAsyncDisposable
 {
     private static readonly ActivitySource ActivitySource = new("Netwrix.ConnectorFramework");
 
@@ -77,7 +77,12 @@ public sealed class FunctionContext : IScanWriter, IScanProgress, IAsyncDisposab
     {
         var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var basePath in new[] { "/var/secrets", "/var/openfaas/secrets" })
+        var secretsBasePath = Environment.GetEnvironmentVariable("SECRETS_BASE_PATH");
+        var searchPaths = secretsBasePath is not null
+            ? new[] { secretsBasePath }
+            : new[] { "/var/secrets", "/var/openfaas/secrets" };
+
+        foreach (var basePath in searchPaths)
         {
             if (!Directory.Exists(basePath))
             {

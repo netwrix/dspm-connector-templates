@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- CA2007: ConfigureAwait — not needed in test-support code -->
+    <NoWarn>CA2007</NoWarn>
+    <AssemblyName>ConnectorFramework.Testing</AssemblyName>
+    <RootNamespace>Netwrix.ConnectorFramework.Testing</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ConnectorFramework/ConnectorFramework.csproj" />
+  </ItemGroup>
+
+  <!-- Explicit SDK refs so connector test consumers can reference their types without indirect deps -->
+  <ItemGroup>
+    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.14-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.14-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Orchestration" Version="2.0.0.14-preview" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
+  </ItemGroup>
+
+</Project>

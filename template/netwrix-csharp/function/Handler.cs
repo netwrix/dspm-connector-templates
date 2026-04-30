@@ -27,8 +27,7 @@ public class Handler : IConnectorHandler
     ///
     /// All four interface aliases resolve to the same scoped instance of
     /// <see cref="AACrawlTaskCorePlatformFacade"/>, preventing the split-state bug where
-    /// <see cref="AACrawlTaskCorePlatformFacade.CrawlTaskQueue"/> or count dictionaries
-    /// diverge across different interface resolutions.
+    /// count dictionaries diverge across different interface resolutions.
     ///
     /// TODO: add connector-specific services after this block (e.g. SharePoint graph client, options).
     /// </summary>

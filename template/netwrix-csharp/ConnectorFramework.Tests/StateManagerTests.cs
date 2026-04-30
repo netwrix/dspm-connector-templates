@@ -103,6 +103,26 @@ public class StateManagerTests
         Assert.Equal(ScanStatus.Failed, mgr.CurrentState);
     }
 
+    [Fact]
+    public async Task SetState_ValidTransition_Running_To_CompletedWithErrors()
+    {
+        var mgr = CreateManager();
+        var result = await mgr.SetStateAsync(ScanStatus.CompletedWithErrors);
+        Assert.True(result);
+        Assert.Equal(ScanStatus.CompletedWithErrors, mgr.CurrentState);
+    }
+
+    [Fact]
+    public async Task SetState_CompletedWithErrors_IsTerminal()
+    {
+        var mgr = CreateManager();
+        await mgr.SetStateAsync(ScanStatus.CompletedWithErrors);
+
+        var result = await mgr.SetStateAsync(ScanStatus.Running);
+        Assert.False(result);
+        Assert.Equal(ScanStatus.CompletedWithErrors, mgr.CurrentState);
+    }
+
     // ── Pause / Resume transitions ─────────────────────────────────────────
 
     [Fact]
@@ -317,6 +337,18 @@ public class StateManagerTests
 
         progressMock.Verify(p => p.UpdateExecutionAsync(
             ScanStatus.Completed, null, null, It.IsNotNull<DateTimeOffset?>(), 0, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Shutdown_CompletedWithErrors_CallsUpdateExecutionAsync_WithNonNullCompletedAt()
+    {
+        var progressMock = new Mock<IScanProgress>();
+        var mgr = CreateManager(progressMock: progressMock);
+
+        await mgr.ShutdownAsync("exec-123", ScanStatus.CompletedWithErrors);
+
+        progressMock.Verify(p => p.UpdateExecutionAsync(
+            ScanStatus.CompletedWithErrors, null, null, It.IsNotNull<DateTimeOffset?>(), 0, default), Times.Once);
     }
 
     [Fact]

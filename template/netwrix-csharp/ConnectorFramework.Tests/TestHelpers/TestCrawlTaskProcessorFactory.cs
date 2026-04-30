@@ -11,6 +11,7 @@ internal sealed class TestCrawlTaskProcessorFactory : ICrawlTaskProcessorFactory
 {
     private int _callCount;
     private readonly Func<int, IReadOnlyList<CrawlItemTask>> _childrenForCall;
+    private readonly Func<int, Exception?>? _exceptionForCall;
 
     // Released once per call so tests can synchronize on task start.
     private readonly SemaphoreSlim _taskStartedSignal = new(0);
@@ -19,8 +20,13 @@ internal sealed class TestCrawlTaskProcessorFactory : ICrawlTaskProcessorFactory
     // Cleared atomically when consumed so only the intended processor is held.
     private TaskCompletionSource<bool>? _nextCrawlBlocker;
 
-    public TestCrawlTaskProcessorFactory(Func<int, IReadOnlyList<CrawlItemTask>> childrenForCall)
-        => _childrenForCall = childrenForCall;
+    public TestCrawlTaskProcessorFactory(
+        Func<int, IReadOnlyList<CrawlItemTask>>? childrenForCall = null,
+        Func<int, Exception?>? exceptionForCall = null)
+    {
+        _childrenForCall = childrenForCall ?? (_ => Array.Empty<CrawlItemTask>());
+        _exceptionForCall = exceptionForCall;
+    }
 
     public int CallCount => _callCount;
 
@@ -51,8 +57,9 @@ internal sealed class TestCrawlTaskProcessorFactory : ICrawlTaskProcessorFactory
         // With MaxWorkers=1 only one processor is in-flight at a time, so all processors
         // created after UnblockCrawl() will get an already-completed Task and won't block.
         var blocker = _nextCrawlBlocker?.Task;
+        var exception = _exceptionForCall?.Invoke(index);
         _taskStartedSignal.Release();
-        return new TestCrawlTaskProcessor(_childrenForCall(index), blocker);
+        return new TestCrawlTaskProcessor(_childrenForCall(index), blocker, exception);
     }
 }
 
@@ -60,11 +67,13 @@ internal sealed class TestCrawlTaskProcessor : ICrawlTaskProcessor
 {
     private readonly IReadOnlyList<CrawlItemTask> _children;
     private readonly Task? _blocker;
+    private readonly Exception? _exception;
 
-    public TestCrawlTaskProcessor(IReadOnlyList<CrawlItemTask> children, Task? blocker = null)
+    public TestCrawlTaskProcessor(IReadOnlyList<CrawlItemTask> children, Task? blocker = null, Exception? exception = null)
     {
         _children = children;
         _blocker = blocker;
+        _exception = exception;
     }
 
     public async Task<CrawlResponse> Crawl(CancellationToken cancellationToken)
@@ -72,6 +81,11 @@ internal sealed class TestCrawlTaskProcessor : ICrawlTaskProcessor
         if (_blocker is not null)
         {
             await _blocker.WaitAsync(cancellationToken);
+        }
+
+        if (_exception is not null)
+        {
+            throw _exception;
         }
 
         return new CrawlResponse
