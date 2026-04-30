@@ -213,6 +213,64 @@ public class AACrawlTaskCorePlatformFacadeTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ── FinalizeScan — CrawlCompletion ────────────────────────────────────────
+
+    [Fact]
+    public void Initialize_WithEmptyTenancyReference_Throws()
+    {
+        var facade = CreateFacade();
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            facade.Initialize(
+                new CrawlTaskConfiguration.SourcePayload(),
+                []));
+
+        Assert.Contains("tenancyReference", ex.Message);
+    }
+
+    [Fact]
+    public async Task FinalizeScan_WritesCrawlCompletionRowPerConnectorReference()
+    {
+        var writerMock = WriterMock();
+        var connectorRef1 = Guid.NewGuid();
+        var connectorRef2 = Guid.NewGuid();
+        var core = CreateCore(writerMock.Object);
+        var facade = CreateFacade(core);
+
+        facade.Initialize(
+            new CrawlTaskConfiguration.SourcePayload(),
+            [
+                new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = connectorRef1 },
+                new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = connectorRef2 },
+            ]);
+
+        await facade.FinalizeScan();
+
+        writerMock.Verify(w => w.SaveObject("crawl_completions", It.IsAny<object>(), false), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task FinalizeScan_PassesScanStartTimestamp_AsCrawlCompletionTimestamp()
+    {
+        var writerMock = WriterMock();
+        var scanStartedAt = new DateTimeOffset(2026, 1, 15, 10, 0, 0, TimeSpan.Zero);
+        var core = CreateCore(writerMock.Object);
+        var facade = CreateFacade(core);
+        object? savedRecord = null;
+        writerMock.Setup(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()))
+            .Callback<string, object, bool>((_, record, _) => savedRecord = record);
+
+        facade.Initialize(
+            new CrawlTaskConfiguration.SourcePayload(),
+            [new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = Guid.NewGuid() }]);
+
+        await facade.FinalizeScan();
+
+        Assert.NotNull(savedRecord);
+        var fullCrawlTimestampUtc = savedRecord!.GetType().GetProperty("fullCrawlTimestampUtc")!.GetValue(savedRecord);
+        Assert.Equal(scanStartedAt, fullCrawlTimestampUtc);
+    }
+
     // ── ICorePlatformFacade delegation ────────────────────────────────────────
 
     [Fact]
