@@ -15,6 +15,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     private const int MaxUpdateIntervalMinutes = 5;
 
     private readonly AACorePlatformFacade _core;
+    private readonly IScanWriter _writer;
     private readonly IScanProgress _progress;
     private readonly ILogger<AACrawlTaskCorePlatformFacade> _logger;
 
@@ -33,13 +34,16 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
 
     public AACrawlTaskCorePlatformFacade(
         AACorePlatformFacade core,
+        IScanWriter writer,
         IScanProgress progress,
         ILogger<AACrawlTaskCorePlatformFacade> logger)
     {
         ArgumentNullException.ThrowIfNull(core);
+        ArgumentNullException.ThrowIfNull(writer);
         ArgumentNullException.ThrowIfNull(progress);
         ArgumentNullException.ThrowIfNull(logger);
         _core = core;
+        _writer = writer;
         _progress = progress;
         _logger = logger;
     }
@@ -123,6 +127,15 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
 
         try
         {
+            try
+            {
+                _writer.FlushBuffers(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unable to flush buffers during regular task update for task {TaskReference}", taskReference);
+            }
+
             using var activity = _progress.StartActivity("update-execution-progress");
             var totalItems = _processedItems.Values.Sum();
             var delta = totalItems - _reportedItemsCount;

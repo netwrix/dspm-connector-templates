@@ -40,9 +40,11 @@ public class AACrawlTaskCorePlatformFacadeTests
 
     private static AACrawlTaskCorePlatformFacade CreateFacade(
         AACorePlatformFacade? core = null,
+        IScanWriter? writer = null,
         IScanProgress? progress = null)
         => new(
             core ?? CreateCore(),
+            writer ?? WriterMock().Object,
             progress ?? ProgressMock().Object,
             NullLogger<AACrawlTaskCorePlatformFacade>.Instance);
 
@@ -117,6 +119,30 @@ public class AACrawlTaskCorePlatformFacadeTests
             null,
             15,
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnsureRegularTaskProgressUpdate_AboveThreshold_FlushesBuffers()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writer: writerMock.Object);
+        SimulateElapsedMinutes(facade, 6);
+
+        await facade.EnsureRegularTaskProgressUpdate(Guid.NewGuid(), new CrawlResponse { ProcessedItemCount = 5 });
+
+        writerMock.Verify(w => w.FlushBuffers(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnsureRegularTaskProgressUpdate_BelowThreshold_DoesNotFlushBuffers()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writer: writerMock.Object);
+        // Default _lastUpdateTimestamp is Stopwatch.GetTimestamp() — elapsed is ~0 minutes
+
+        await facade.EnsureRegularTaskProgressUpdate(Guid.NewGuid(), new CrawlResponse { ProcessedItemCount = 5 });
+
+        writerMock.Verify(w => w.FlushBuffers(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── FinalizeScan ─────────────────────────────────────────────────────────
