@@ -120,11 +120,8 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
             "Upload of graph based State in Time Records is not supported in Access Analyzer connectors.");
     }
 
-    public async Task UploadCrawlCompletion(
-        CrawlRunRequest? crawlRunRequest)
+    public async Task UploadCrawlCompletion(CrawlRunRequest crawlRunRequest)
     {
-        ArgumentNullException.ThrowIfNull(crawlRunRequest);
-
         var completedAt = DateTimeOffset.UtcNow;
         await _writeLock.WaitAsync();
         try
@@ -140,6 +137,9 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
                     completedAt,
                 }, updateStatus: false);
             }
+            // Terminal flush: called once at the very end of the scan after all workers have finished,
+            // so closing the BatchManager channels here is safe (unlike UploadSiTSchemaRecords which
+            // must use non-closing FlushBuffers because concurrent workers may still be writing).
             await _writer.FlushTablesAsync(CancellationToken.None);
         }
         finally

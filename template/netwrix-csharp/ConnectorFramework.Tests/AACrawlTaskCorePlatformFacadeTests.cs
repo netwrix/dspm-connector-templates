@@ -48,7 +48,7 @@ public class AACrawlTaskCorePlatformFacadeTests
             progress ?? ProgressMock().Object,
             NullLogger<AACrawlTaskCorePlatformFacade>.Instance);
 
-    private static CrawlRunRequest MakeRequest(List<Guid>? connectorRefs = null) => new()
+    private static CrawlRunRequest MakeRequest(List<Guid>? connectorRefs = null, DateTimeOffset? fullCrawlTimestamp = null) => new()
     {
         CrawlRunReference = Guid.NewGuid(),
         RootCrawlTaskReference = Guid.NewGuid(),
@@ -61,6 +61,7 @@ public class AACrawlTaskCorePlatformFacadeTests
         ItemExternalReference = "test-tenant",
         ItemName = "Test Tenant",
         ScanContextId = "test-scan",
+        FullCrawlTimestampUtc = fullCrawlTimestamp ?? default,
     };
 
     /// <summary>
@@ -246,23 +247,8 @@ public class AACrawlTaskCorePlatformFacadeTests
         var core = CreateCore(writerMock.Object);
         var facade = CreateFacade(core);
 
-        var crawlRunRequest = new CrawlRunRequest
-        {
-            CrawlRunReference = Guid.NewGuid(),
-            RootCrawlTaskReference = Guid.NewGuid(),
-            TenancyReference = Guid.Empty,
-            SourceReference = Guid.NewGuid(),
-            ImportBatchReference = Guid.NewGuid(),
-            CrawlType = CrawlType.Full,
-            ConnectorReferences = [connectorRef1, connectorRef2],
-            ItemType = null,
-            ItemExternalReference = "test-tenant",
-            ItemName = "Test Tenant",
-            ScanContextId = "test-scan",
-        };
-
         facade.Initialize(
-            crawlRunRequest,
+            MakeRequest([connectorRef1, connectorRef2]),
             new CrawlTaskConfiguration.SourcePayload(),
             [
                 new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = connectorRef1 },
@@ -286,24 +272,8 @@ public class AACrawlTaskCorePlatformFacadeTests
             .Callback<string, object, bool>((_, record, _) => savedRecord = record);
         var connectorRef = Guid.NewGuid();
 
-        var crawlRunRequest = new CrawlRunRequest
-        {
-            CrawlRunReference = Guid.NewGuid(),
-            RootCrawlTaskReference = Guid.NewGuid(),
-            TenancyReference = Guid.Empty,
-            SourceReference = Guid.NewGuid(),
-            ImportBatchReference = Guid.NewGuid(),
-            CrawlType = CrawlType.Full,
-            ConnectorReferences = [connectorRef],
-            ItemType = null,
-            ItemExternalReference = "test-tenant",
-            ItemName = "Test Tenant",
-            ScanContextId = "test-scan",
-            FullCrawlTimestampUtc = scanStartedAt,
-        };
-
         facade.Initialize(
-            crawlRunRequest,
+            MakeRequest([connectorRef], fullCrawlTimestamp: scanStartedAt),
             new CrawlTaskConfiguration.SourcePayload(),
             [new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = connectorRef }]);
 

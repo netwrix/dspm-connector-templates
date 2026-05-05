@@ -218,7 +218,7 @@ public class AACorePlatformFacadeTests
 
         await facade.UploadCrawlCompletion(crawlRunRequest);
 
-        writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -244,7 +244,7 @@ public class AACorePlatformFacadeTests
         await facade.UploadCrawlCompletion(crawlRunRequest);
 
         writerMock.Verify(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()), Times.Never);
-        writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── DecryptServiceBusMessage ─────────────────────────────────────────────

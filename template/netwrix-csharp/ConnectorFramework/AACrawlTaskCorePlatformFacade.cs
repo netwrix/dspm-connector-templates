@@ -78,10 +78,10 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         CrawlTaskConfiguration.SourcePayload source,
         List<CrawlTaskConfiguration.ConnectorConfigPayload> configs)
     {
+        ArgumentNullException.ThrowIfNull(request);
         _crawlRunRequest = request;
         _sourcePayload = source;
         _connectorConfigs = configs;
-
     }
 
     public Task<CrawlTaskConfiguration> StartTask(Guid crawlTaskReference, DateTimeOffset startDate)
@@ -184,6 +184,9 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
 
     public async Task<string> FinalizeScan()
     {
+        if (_crawlRunRequest is null)
+            throw new InvalidOperationException("Initialize() must be called before FinalizeScan.");
+
         using var activity = _progress.StartActivity("finalize-scan");
         var totalItems = _processedItems.Values.Sum();
         var delta = totalItems - _reportedItemsCount;
