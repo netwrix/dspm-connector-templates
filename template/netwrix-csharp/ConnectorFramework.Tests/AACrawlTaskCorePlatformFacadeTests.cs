@@ -5,6 +5,8 @@ using Moq;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models.Api;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
+using Netwrix.Overlord.Sdk.Core.TaskScheduler;
+using Netwrix.Overlord.Sdk.Orchestration;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -45,6 +47,21 @@ public class AACrawlTaskCorePlatformFacadeTests
             core ?? CreateCore(),
             progress ?? ProgressMock().Object,
             NullLogger<AACrawlTaskCorePlatformFacade>.Instance);
+
+    private static CrawlRunRequest MakeRequest(List<Guid>? connectorRefs = null) => new()
+    {
+        CrawlRunReference = Guid.NewGuid(),
+        RootCrawlTaskReference = Guid.NewGuid(),
+        TenancyReference = Guid.Empty,
+        SourceReference = Guid.NewGuid(),
+        ImportBatchReference = Guid.NewGuid(),
+        CrawlType = CrawlType.Full,
+        ConnectorReferences = connectorRefs ?? [],
+        ItemType = null,
+        ItemExternalReference = "test-tenant",
+        ItemName = "Test Tenant",
+        ScanContextId = "test-scan",
+    };
 
     /// <summary>
     /// Sets _lastUpdateTimestamp to a value that makes GetElapsedTime report > 5 minutes,
@@ -126,6 +143,7 @@ public class AACrawlTaskCorePlatformFacadeTests
     {
         var progressMock = ProgressMock();
         var facade = CreateFacade(progress: progressMock.Object);
+        facade.Initialize(MakeRequest(), new CrawlTaskConfiguration.SourcePayload(), []);
 
         await facade.FinalizeScan();
 
@@ -142,6 +160,7 @@ public class AACrawlTaskCorePlatformFacadeTests
     public async Task FinalizeScan_NoErrors_ReturnsCompleted()
     {
         var facade = CreateFacade();
+        facade.Initialize(MakeRequest(), new CrawlTaskConfiguration.SourcePayload(), []);
 
         var result = await facade.FinalizeScan();
 
@@ -152,6 +171,7 @@ public class AACrawlTaskCorePlatformFacadeTests
     public async Task FinalizeScan_WithErrors_ReturnsCompletedWithErrors()
     {
         var facade = CreateFacade();
+        facade.Initialize(MakeRequest(), new CrawlTaskConfiguration.SourcePayload(), []);
         var taskRef = Guid.NewGuid();
         await facade.FinaliseTask(new APICrawlTaskProgress
         {
@@ -171,6 +191,7 @@ public class AACrawlTaskCorePlatformFacadeTests
     {
         var progressMock = ProgressMock();
         var facade = CreateFacade(progress: progressMock.Object);
+        facade.Initialize(MakeRequest(), new CrawlTaskConfiguration.SourcePayload(), []);
         var taskRef = Guid.NewGuid();
         await facade.FinaliseTask(new APICrawlTaskProgress
         {
@@ -196,6 +217,7 @@ public class AACrawlTaskCorePlatformFacadeTests
     {
         var progressMock = ProgressMock();
         var facade = CreateFacade(progress: progressMock.Object);
+        facade.Initialize(MakeRequest(), new CrawlTaskConfiguration.SourcePayload(), []);
         var taskId = Guid.NewGuid();
 
         // Record some items first (below threshold so UpdateExecution not called yet)
@@ -216,19 +238,6 @@ public class AACrawlTaskCorePlatformFacadeTests
     // ── FinalizeScan — CrawlCompletion ────────────────────────────────────────
 
     [Fact]
-    public void Initialize_WithEmptyTenancyReference_Throws()
-    {
-        var facade = CreateFacade();
-
-        var ex = Assert.Throws<ArgumentException>(() =>
-            facade.Initialize(
-                new CrawlTaskConfiguration.SourcePayload(),
-                []));
-
-        Assert.Contains("tenancyReference", ex.Message);
-    }
-
-    [Fact]
     public async Task FinalizeScan_WritesCrawlCompletionRowPerConnectorReference()
     {
         var writerMock = WriterMock();
@@ -237,7 +246,23 @@ public class AACrawlTaskCorePlatformFacadeTests
         var core = CreateCore(writerMock.Object);
         var facade = CreateFacade(core);
 
+        var crawlRunRequest = new CrawlRunRequest
+        {
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
+            ConnectorReferences = [connectorRef1, connectorRef2],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
+        };
+
         facade.Initialize(
+            crawlRunRequest,
             new CrawlTaskConfiguration.SourcePayload(),
             [
                 new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = connectorRef1 },
@@ -259,10 +284,28 @@ public class AACrawlTaskCorePlatformFacadeTests
         object? savedRecord = null;
         writerMock.Setup(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()))
             .Callback<string, object, bool>((_, record, _) => savedRecord = record);
+        var connectorRef = Guid.NewGuid();
+
+        var crawlRunRequest = new CrawlRunRequest
+        {
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
+            ConnectorReferences = [connectorRef],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
+            FullCrawlTimestampUtc = scanStartedAt,
+        };
 
         facade.Initialize(
+            crawlRunRequest,
             new CrawlTaskConfiguration.SourcePayload(),
-            [new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = Guid.NewGuid() }]);
+            [new CrawlTaskConfiguration.ConnectorConfigPayload { ConnectorReference = connectorRef }]);
 
         await facade.FinalizeScan();
 

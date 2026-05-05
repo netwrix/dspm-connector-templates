@@ -1,9 +1,12 @@
+using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
+using Netwrix.Overlord.Sdk.Core.TaskScheduler;
+using Netwrix.Overlord.Sdk.Orchestration;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -174,13 +177,22 @@ public class AACorePlatformFacadeTests
         var facade = CreateFacade(writerMock.Object);
         var connectorRef1 = Guid.NewGuid();
         var connectorRef2 = Guid.NewGuid();
-        var context = new CrawlContext
+        var crawlRunRequest = new CrawlRunRequest
         {
-            TenancyReference = Guid.NewGuid(),
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
             ConnectorReferences = [connectorRef1, connectorRef2],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
         };
 
-        await facade.UploadCrawlCompletion(context);
+        await facade.UploadCrawlCompletion(crawlRunRequest);
 
         writerMock.Verify(w => w.SaveObject("crawl_completions", It.IsAny<object>(), false), Times.Exactly(2));
     }
@@ -190,13 +202,22 @@ public class AACorePlatformFacadeTests
     {
         var writerMock = WriterMock();
         var facade = CreateFacade(writerMock.Object);
-        var context = new CrawlContext
+        var crawlRunRequest = new CrawlRunRequest
         {
-            TenancyReference = Guid.NewGuid(),
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
             ConnectorReferences = [Guid.NewGuid()],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
         };
 
-        await facade.UploadCrawlCompletion(context);
+        await facade.UploadCrawlCompletion(crawlRunRequest);
 
         writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);
     }
@@ -206,13 +227,22 @@ public class AACorePlatformFacadeTests
     {
         var writerMock = WriterMock();
         var facade = CreateFacade(writerMock.Object);
-        var context = new CrawlContext
+        var crawlRunRequest = new CrawlRunRequest
         {
-            TenancyReference = Guid.NewGuid(),
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
             ConnectorReferences = [],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
         };
 
-        await facade.UploadCrawlCompletion(context);
+        await facade.UploadCrawlCompletion(crawlRunRequest);
 
         writerMock.Verify(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()), Times.Never);
         writerMock.Verify(w => w.FlushTablesAsync(CancellationToken.None), Times.Once);

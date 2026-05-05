@@ -134,8 +134,9 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
                 _writer.SaveObject("crawl_completions", new
                 {
                     tenancyReference = crawlRunRequest.TenancyReference,
+                    sourceReference = crawlRunRequest.SourceReference,
                     connectorReference,
-                    crawlRunRequest.FullCrawlTimestampUtc,
+                    fullCrawlTimestampUtc = crawlRunRequest.FullCrawlTimestampUtc,
                     completedAt,
                 }, updateStatus: false);
             }
