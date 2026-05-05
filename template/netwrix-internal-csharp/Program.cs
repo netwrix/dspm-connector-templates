@@ -65,6 +65,8 @@ namespace function
                                     var path = httpContext.Request.Path.Value;
                                     return path != "/health" && path != "/healthz" && path != "/ready";
                                 };
+                                // Enable recording of exception details
+                                options.RecordException = true;
                             })
                             // HttpClient instrumentation automatically propagates trace context to outgoing requests
                             .AddHttpClientInstrumentation()
