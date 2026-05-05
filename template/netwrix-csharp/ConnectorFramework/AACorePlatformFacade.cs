@@ -39,6 +39,16 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
             ?? throw new InvalidOperationException("Unable to deserialize data payload."));
     }
 
+    /// <summary>
+    /// Saves schema records to the named table and, when <paramref name="isFinal"/> is true,
+    /// performs a non-closing buffer flush so data is visible to ClickHouse without sealing
+    /// the batch channel (which would break concurrently-running orchestrator workers).
+    /// </summary>
+    /// <param name="context">Crawl context for the current task.</param>
+    /// <param name="tableName">Destination table name in ClickHouse.</param>
+    /// <param name="entities">Records to write.</param>
+    /// <param name="isFinal">When <c>true</c>, triggers a non-closing buffer flush after writing.</param>
+    /// <param name="chunkId">Chunk sequence number (unused; present for interface compatibility).</param>
     public async Task UploadSiTSchemaRecords(CrawlContext context, string tableName, IReadOnlyList<JsonObject> entities, bool isFinal,
         int chunkId = 1)
     {
@@ -72,6 +82,7 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
         _writeLock.Dispose();
@@ -120,6 +131,12 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
             "Upload of graph based State in Time Records is not supported in Access Analyzer connectors.");
     }
 
+    /// <summary>
+    /// Writes one crawl-completion record per connector reference in <paramref name="crawlRunRequest"/>
+    /// to the <c>crawl_completions</c> table, then performs the terminal closing flush.
+    /// Call once after all workers have finished — not from concurrent workers.
+    /// </summary>
+    /// <param name="crawlRunRequest">The originating crawl run request; its connector references, tenancy, source, and full-crawl timestamp are written to <c>crawl_completions</c>.</param>
     public async Task UploadCrawlCompletion(CrawlRunRequest crawlRunRequest)
     {
         var completedAt = DateTimeOffset.UtcNow;

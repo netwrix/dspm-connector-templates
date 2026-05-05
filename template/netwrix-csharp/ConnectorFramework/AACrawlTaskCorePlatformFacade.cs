@@ -75,6 +75,7 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     /// Stores the request payloads deserialized from the connector request body.
     /// Must be called before <see cref="StartTask"/>.
     /// </summary>
+    /// <param name="request">The crawl run request used to write crawl-completion records in <see cref="FinalizeScan"/>.</param>
     /// <param name="source">Source payload from the connector request.</param>
     /// <param name="configs">Connector config payloads from the connector request.</param>
     public void Initialize(
@@ -88,6 +89,12 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         _connectorConfigs = configs;
     }
 
+    /// <summary>
+    /// Returns the <see cref="CrawlTaskConfiguration"/> for the given task reference,
+    /// records a start timestamp for duration tracking, and increments the tasks-started metric.
+    /// </summary>
+    /// <param name="crawlTaskReference">Unique identifier for this task; used to key the start timestamp.</param>
+    /// <param name="startDate">Scheduled start date for the task (unused; present for interface compatibility).</param>
     public Task<CrawlTaskConfiguration> StartTask(Guid crawlTaskReference, DateTimeOffset startDate)
     {
         if (_sourcePayload is null || _connectorConfigs is null)
@@ -107,6 +114,13 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         });
     }
 
+    /// <summary>
+    /// Throttled progress update: flushes in-memory write buffers and reports incremental
+    /// completed-object counts to the platform at most once per <c>MaxUpdateIntervalMinutes</c>.
+    /// A CAS guard prevents duplicate concurrent updates when multiple workers call simultaneously.
+    /// </summary>
+    /// <param name="taskReference">Identifier of the task reporting progress.</param>
+    /// <param name="taskProgress">Latest progress snapshot from the connector worker.</param>
     public async Task EnsureRegularTaskProgressUpdate(Guid taskReference, CrawlResponse taskProgress)
     {
         _processedErrors.AddOrUpdate(
@@ -161,6 +175,12 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         }
     }
 
+    /// <summary>
+    /// Records task completion: updates per-task item and error counts, records task duration
+    /// and emits the tasks-completed metric, accumulates errors into the scan-level total,
+    /// and removes the task's entries to prevent unbounded memory growth.
+    /// </summary>
+    /// <param name="taskProgress">Final progress report from the orchestrator for this task.</param>
     public Task FinaliseTask(APICrawlTaskProgress taskProgress)
     {
         _processedErrors.AddOrUpdate(
@@ -195,6 +215,15 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Writes crawl-completion records, reports the final execution status to the platform,
+    /// and returns the resolved <see cref="ScanStatus"/> string
+    /// (<see cref="ScanStatus.Completed"/> or <see cref="ScanStatus.CompletedWithErrors"/>).
+    /// </summary>
+    /// <returns>
+    /// <see cref="ScanStatus.CompletedWithErrors"/> when any task reported item errors;
+    /// <see cref="ScanStatus.Completed"/> otherwise.
+    /// </returns>
     public async Task<string> FinalizeScan()
     {
         if (_crawlRunRequest is null)
