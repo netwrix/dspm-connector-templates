@@ -49,6 +49,7 @@ public static class ConnectorFrameworkTestServiceExtensions
         services.AddScoped<AACrawlTaskCorePlatformFacade>(sp =>
             new AACrawlTaskCorePlatformFacade(
                 sp.GetRequiredService<AACorePlatformFacade>(),
+                sp.GetRequiredService<IScanWriter>(),
                 sp.GetRequiredService<IScanProgress>(),
                 sp.GetRequiredService<ILoggerFactory>()
                     .CreateLogger<AACrawlTaskCorePlatformFacade>()));
