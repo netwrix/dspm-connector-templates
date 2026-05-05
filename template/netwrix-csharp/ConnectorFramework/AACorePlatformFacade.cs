@@ -5,6 +5,7 @@ using Netwrix.Overlord.Sdk.Cloud;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
 using Netwrix.Overlord.Sdk.Core.State.Models;
+using Netwrix.Overlord.Sdk.Orchestration;
 
 namespace Netwrix.ConnectorFramework;
 
@@ -38,6 +39,16 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
             ?? throw new InvalidOperationException("Unable to deserialize data payload."));
     }
 
+    /// <summary>
+    /// Saves schema records to the named table and, when <paramref name="isFinal"/> is true,
+    /// performs a non-closing buffer flush so data is visible to ClickHouse without sealing
+    /// the batch channel (which would break concurrently-running orchestrator workers).
+    /// </summary>
+    /// <param name="context">Crawl context for the current task.</param>
+    /// <param name="tableName">Destination table name in ClickHouse.</param>
+    /// <param name="entities">Records to write.</param>
+    /// <param name="isFinal">When <c>true</c>, triggers a non-closing buffer flush after writing.</param>
+    /// <param name="chunkId">Chunk sequence number (unused; present for interface compatibility).</param>
     public async Task UploadSiTSchemaRecords(CrawlContext context, string tableName, IReadOnlyList<JsonObject> entities, bool isFinal,
         int chunkId = 1)
     {
@@ -71,6 +82,7 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
         }
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
         _writeLock.Dispose();
@@ -117,5 +129,39 @@ public sealed class AACorePlatformFacade : ICorePlatformFacade, IDisposable
     {
         throw new NotSupportedException(
             "Upload of graph based State in Time Records is not supported in Access Analyzer connectors.");
+    }
+
+    /// <summary>
+    /// Writes one crawl-completion record per connector reference in <paramref name="crawlRunRequest"/>
+    /// to the <c>crawl_completions</c> table, then performs the terminal closing flush.
+    /// Call once after all workers have finished — not from concurrent workers.
+    /// </summary>
+    /// <param name="crawlRunRequest">The originating crawl run request; its connector references, tenancy, source, and full-crawl timestamp are written to <c>crawl_completions</c>.</param>
+    public async Task UploadCrawlCompletion(CrawlRunRequest crawlRunRequest)
+    {
+        var completedAt = DateTimeOffset.UtcNow;
+        await _writeLock.WaitAsync();
+        try
+        {
+            foreach (var connectorReference in crawlRunRequest.ConnectorReferences)
+            {
+                _writer.SaveObject("crawl_completions", new
+                {
+                    tenancyReference = crawlRunRequest.TenancyReference,
+                    sourceReference = crawlRunRequest.SourceReference,
+                    connectorReference,
+                    fullCrawlTimestampUtc = crawlRunRequest.FullCrawlTimestampUtc,
+                    completedAt,
+                }, updateStatus: false);
+            }
+            // Terminal flush: called once at the very end of the scan after all workers have finished,
+            // so closing the BatchManager channels here is safe (unlike UploadSiTSchemaRecords which
+            // must use non-closing FlushBuffers because concurrent workers may still be writing).
+            await _writer.FlushTablesAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 }

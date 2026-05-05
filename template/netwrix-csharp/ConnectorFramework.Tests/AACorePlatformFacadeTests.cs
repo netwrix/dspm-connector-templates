@@ -4,6 +4,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Netwrix.Overlord.Sdk.Cloud.TaskScheduler.Models;
 using Netwrix.Overlord.Sdk.Core.Activity.Models;
+using Netwrix.Overlord.Sdk.Core.TaskScheduler;
+using Netwrix.Overlord.Sdk.Orchestration;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -101,6 +103,22 @@ public class AACorePlatformFacadeTests
         writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task UploadSiTSchemaRecords_ConcurrentCalls_DoNotThrowAndSaveAllEntities()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var entity = new JsonObject { ["id"] = "x" };
+
+        var tasks = Enumerable.Range(0, 10).Select(_ =>
+            facade.UploadSiTSchemaRecords(new CrawlContext(), "permissions", [entity], isFinal: false));
+
+        // Should complete without throwing InvalidOperationException from BatchManager's single-writer guard
+        await Task.WhenAll(tasks);
+
+        writerMock.Verify(w => w.SaveObject("permissions", entity, true), Times.Exactly(10));
+    }
+
     // ── UploadActivityRecords ────────────────────────────────────────────────
 
     [Fact]
@@ -147,6 +165,86 @@ public class AACorePlatformFacadeTests
         var result = await facade.DecryptTenancyData<JsonElement>(Array.Empty<byte>(), payload);
 
         Assert.Equal("t-1", result.GetProperty("tenantId").GetString());
+    }
+
+    // ── UploadCrawlCompletion ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task UploadCrawlCompletion_SavesOneRowPerConnectorReference()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var connectorRef1 = Guid.NewGuid();
+        var connectorRef2 = Guid.NewGuid();
+        var crawlRunRequest = new CrawlRunRequest
+        {
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
+            ConnectorReferences = [connectorRef1, connectorRef2],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
+        };
+
+        await facade.UploadCrawlCompletion(crawlRunRequest);
+
+        writerMock.Verify(w => w.SaveObject("crawl_completions", It.IsAny<object>(), false), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task UploadCrawlCompletion_FlushesAfterSaving()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var crawlRunRequest = new CrawlRunRequest
+        {
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
+            ConnectorReferences = [Guid.NewGuid()],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
+        };
+
+        await facade.UploadCrawlCompletion(crawlRunRequest);
+
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task UploadCrawlCompletion_EmptyConnectorReferences_SavesNoRowsButStillFlushes()
+    {
+        var writerMock = WriterMock();
+        var facade = CreateFacade(writerMock.Object);
+        var crawlRunRequest = new CrawlRunRequest
+        {
+            CrawlRunReference = Guid.NewGuid(),
+            RootCrawlTaskReference = Guid.NewGuid(),
+            TenancyReference = Guid.Empty,
+            SourceReference = Guid.NewGuid(),
+            ImportBatchReference = Guid.NewGuid(),
+            CrawlType = CrawlType.Full,
+            ConnectorReferences = [],
+            ItemType = null,
+            ItemExternalReference = "test-tenant",
+            ItemName = "Test Tenant",
+            ScanContextId = "test-scan",
+        };
+
+        await facade.UploadCrawlCompletion(crawlRunRequest);
+
+        writerMock.Verify(w => w.SaveObject(It.IsAny<string>(), It.IsAny<object>(), It.IsAny<bool>()), Times.Never);
+        writerMock.Verify(w => w.FlushTablesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── DecryptServiceBusMessage ─────────────────────────────────────────────

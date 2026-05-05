@@ -32,6 +32,13 @@ public sealed class ConnectorStateClient
 
     // ── Public methods ───────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns all key-value pairs stored for <paramref name="scanId"/>, or an empty dictionary
+    /// if none exist.
+    /// </summary>
+    /// <param name="scanId">The scan whose state to retrieve.</param>
+    /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
+    /// <param name="ct">Cancellation token.</param>
     public async Task<Dictionary<string, string>> GetStateAsync(
         string scanId, string? scanExecutionId, CancellationToken ct)
     {
@@ -45,6 +52,14 @@ public sealed class ConnectorStateClient
         return new Dictionary<string, string>();
     }
 
+    /// <summary>
+    /// Returns the serialized value for <paramref name="key"/> within <paramref name="scanId"/>'s
+    /// state, or <c>null</c> if the key does not exist.
+    /// </summary>
+    /// <param name="scanId">The scan whose state to query.</param>
+    /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
+    /// <param name="key">The state key to look up.</param>
+    /// <param name="ct">Cancellation token.</param>
     public async Task<string?> GetStateValueAsync(
         string scanId, string? scanExecutionId, string key, CancellationToken ct)
     {
@@ -105,6 +120,14 @@ public sealed class ConnectorStateClient
         }
     }
 
+    /// <summary>
+    /// Writes (upserts) the key-value pairs in <paramref name="data"/> into the connector-state
+    /// service for <paramref name="scanId"/>.
+    /// </summary>
+    /// <param name="scanId">The scan whose state to update.</param>
+    /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
+    /// <param name="data">Key-value pairs to upsert.</param>
+    /// <param name="ct">Cancellation token.</param>
     public async Task PostStateAsync(
         string scanId, string? scanExecutionId, Dictionary<string, string> data, CancellationToken ct)
     {
@@ -159,6 +182,10 @@ public sealed class ConnectorStateClient
     /// when key count or key length would produce a query string exceeding
     /// <see cref="MaxDeleteQueryLength"/> characters.
     /// </summary>
+    /// <param name="scanId">The scan whose state keys should be deleted.</param>
+    /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
+    /// <param name="names">State key names to delete.</param>
+    /// <param name="ct">Cancellation token.</param>
     public async Task DeleteManyAsync(
         string scanId, string? scanExecutionId, string[] names, CancellationToken ct)
     {
