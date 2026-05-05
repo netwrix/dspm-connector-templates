@@ -87,7 +87,7 @@ internal static class Program
             catch (Exception ex)
             {
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                activity?.RecordException(ex);
+                activity?.AddException(ex);
                 requestLogger.LogError(ex,
                     "Request failed {Method} {Path}",
                     SanitizeForLog(ctx.Request.Method), SanitizeForLog(ctx.Request.Path.Value));
@@ -216,7 +216,7 @@ internal static class Program
                 new KeyValuePair<string, object?>("status", "failed"));
 
             jobActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            jobActivity?.RecordException(ex);
+            jobActivity?.AddException(ex);
             logger.LogError(ex, "Job failed");
             if (isLongRunning && context is not null)
             {
