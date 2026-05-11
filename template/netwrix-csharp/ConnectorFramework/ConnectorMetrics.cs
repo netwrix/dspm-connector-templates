@@ -27,23 +27,6 @@ internal static class ConnectorMetrics
         "connector.tasks.completed",
         description: "Number of crawl tasks finalised within a scan execution");
 
-    /// <summary>
-    /// Wall-clock duration of individual crawl tasks in seconds.
-    /// Measured from StartTask() to FinaliseTask() for the same task reference.
-    /// </summary>
-    public static readonly Histogram<double> TaskDuration = Meter.CreateHistogram<double>(
-        "connector.task.duration",
-        unit: "s",
-        description: "Wall-clock duration of individual crawl tasks in seconds");
-
-    /// <summary>
-    /// Number of crawl tasks that permanently failed after exhausting all retry attempts.
-    /// Emitted by CrawlRunOrchestrator on the same meter when Module B orchestration is active.
-    /// </summary>
-    public static readonly Counter<long> TasksDeadLettered = Meter.CreateCounter<long>(
-        "connector.tasks.dead_lettered",
-        description: "Number of crawl tasks that permanently failed after exhausting all retry attempts");
-
     // ── Source rate limiting ──────────────────────────────────────────────────
 
     /// <summary>

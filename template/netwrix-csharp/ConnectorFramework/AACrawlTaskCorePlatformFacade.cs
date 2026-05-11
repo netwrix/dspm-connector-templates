@@ -22,7 +22,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
 
     private readonly ConcurrentDictionary<Guid, int> _processedItems = new();
     private readonly ConcurrentDictionary<Guid, int> _processedErrors = new();
-    private readonly ConcurrentDictionary<Guid, long> _taskStartTimestamps = new();
     private int _reportedItemsCount;
     private int _totalErrors;
     private long _lastUpdateTimestamp = Stopwatch.GetTimestamp();
@@ -90,10 +89,10 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     }
 
     /// <summary>
-    /// Returns the <see cref="CrawlTaskConfiguration"/> for the given task reference,
-    /// records a start timestamp for duration tracking, and increments the tasks-started metric.
+    /// Returns the <see cref="CrawlTaskConfiguration"/> for the given task reference
+    /// and increments the tasks-started metric.
     /// </summary>
-    /// <param name="crawlTaskReference">Unique identifier for this task; used to key the start timestamp.</param>
+    /// <param name="crawlTaskReference">Unique identifier for this task.</param>
     /// <param name="startDate">Scheduled start date for the task (unused; present for interface compatibility).</param>
     public Task<CrawlTaskConfiguration> StartTask(Guid crawlTaskReference, DateTimeOffset startDate)
     {
@@ -102,7 +101,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             throw new InvalidOperationException("Initialize() must be called before StartTask.");
         }
 
-        _taskStartTimestamps[crawlTaskReference] = Stopwatch.GetTimestamp();
         ConnectorMetrics.TasksStarted.Add(1);
 
         return Task.FromResult(new CrawlTaskConfiguration
@@ -176,8 +174,8 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     }
 
     /// <summary>
-    /// Records task completion: updates per-task item and error counts, records task duration
-    /// and emits the tasks-completed metric, accumulates errors into the scan-level total,
+    /// Records task completion: updates per-task item and error counts, emits the
+    /// tasks-completed metric, accumulates errors into the scan-level total,
     /// and removes the task's entries to prevent unbounded memory growth.
     /// </summary>
     /// <param name="taskProgress">Final progress report from the orchestrator for this task.</param>
@@ -193,11 +191,6 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
             taskProgress.ProcessedItemCount,
             (_, _) => taskProgress.ProcessedItemCount);
 
-        // Record duration and completion for all tasks, including leaf tasks (ChildTasks is null).
-        if (_taskStartTimestamps.TryRemove(taskProgress.CrawlTaskReference, out var startTimestamp))
-        {
-            ConnectorMetrics.TaskDuration.Record(Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
-        }
         ConnectorMetrics.TasksCompleted.Add(1);
 
         // Accumulate errors into the scan-level total before removing the per-task entry.
@@ -227,7 +220,9 @@ public sealed class AACrawlTaskCorePlatformFacade : ICorePlatformFacade, ICrawlT
     public async Task<string> FinalizeScan()
     {
         if (_crawlRunRequest is null)
+        {
             throw new InvalidOperationException("Initialize() must be called before FinalizeScan.");
+        }
 
         using var activity = _progress.StartActivity("finalize-scan");
         var totalItems = _processedItems.Values.Sum();
