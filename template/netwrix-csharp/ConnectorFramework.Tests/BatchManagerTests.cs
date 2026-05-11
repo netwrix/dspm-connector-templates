@@ -2,6 +2,8 @@ using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
+using Netwrix.Overlord.Sdk.Core.Exceptions;
+using Polly.CircuitBreaker;
 using Xunit;
 
 namespace Netwrix.ConnectorFramework.Tests;
@@ -191,6 +193,69 @@ public class BatchManagerTests
         await bm.FlushAsync();
 
         Assert.Equal(2, flushedCount);
+    }
+
+    [Fact]
+    public async Task FlushAsync_BrokenCircuit_ThrowsInfrastructureUnavailable()
+    {
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new BrokenCircuitException("circuit open"));
+
+        var httpClient = new HttpClient(handlerMock.Object);
+        var factoryMock = new Mock<IHttpClientFactory>();
+        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+
+        var bm = new BatchManager("test_table", factoryMock.Object, MakeRequest(), NullLogger<BatchManager>.Instance);
+        bm.AddObject(new { x = 1 });
+
+        var ex = await Assert.ThrowsAsync<InfrastructureUnavailableException>(() => bm.FlushAsync());
+        Assert.Contains("data-ingestion", ex.Message);
+        // bm intentionally not disposed: FlushAsync already completed the channel and
+        // _flushWorker is faulted — DisposeAsync would re-throw the same exception.
+    }
+
+    [Fact]
+    public async Task FlushAsync_IsolatedCircuit_ThrowsInfrastructureUnavailable()
+    {
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new IsolatedCircuitException("circuit isolated"));
+
+        var httpClient = new HttpClient(handlerMock.Object);
+        var factoryMock = new Mock<IHttpClientFactory>();
+        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+
+        var bm = new BatchManager("test_table", factoryMock.Object, MakeRequest(), NullLogger<BatchManager>.Instance);
+        bm.AddObject(new { x = 1 });
+
+        await Assert.ThrowsAsync<InfrastructureUnavailableException>(() => bm.FlushAsync());
+    }
+
+    [Fact]
+    public async Task FlushAsync_GenericHttpException_IsSwallowed()
+    {
+        var handlerMock = new Mock<HttpMessageHandler>();
+        handlerMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new HttpRequestException("connection refused"));
+
+        var httpClient = new HttpClient(handlerMock.Object);
+        var factoryMock = new Mock<IHttpClientFactory>();
+        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+
+        await using var bm = new BatchManager("test_table", factoryMock.Object, MakeRequest(), NullLogger<BatchManager>.Instance);
+        bm.AddObject(new { x = 1 });
+
+        await bm.FlushAsync(); // should not throw
     }
 
     [Fact]
