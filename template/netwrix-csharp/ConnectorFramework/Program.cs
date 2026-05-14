@@ -444,6 +444,7 @@ internal static class Program
             {
                 metrics.SetResourceBuilder(resourceBuilder)
                     .AddMeter(ConnectorMetrics.MeterName)
+                    .AddMeter("Netwrix.Overlord.Sdk.Orchestration") // CrawlRunOrchestratorMetrics.MeterName — use type constant once Sdk.Orchestration package is bumped
                     .AddHttpClientInstrumentation();
 
                 if (isHttpMode)

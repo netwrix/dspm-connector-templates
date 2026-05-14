@@ -17,9 +17,9 @@
 
   <!-- Explicit SDK refs so connector test consumers can reference their types without indirect deps -->
   <ItemGroup>
-    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.19-preview" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.19-preview" />
-    <PackageReference Include="Netwrix.Overlord.Sdk.Orchestration" Version="2.0.0.19-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Cloud" Version="2.0.0.25-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Core" Version="2.0.0.25-preview" />
+    <PackageReference Include="Netwrix.Overlord.Sdk.Orchestration" Version="2.0.0.25-preview" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
   </ItemGroup>
 

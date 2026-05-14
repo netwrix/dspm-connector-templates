@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Netwrix.Overlord.Sdk.Core.Exceptions;
 using Netwrix.Overlord.Sdk.Core.Storage.Exceptions;
+using Polly.CircuitBreaker;
 
 namespace Netwrix.ConnectorFramework;
 
@@ -113,6 +115,10 @@ public sealed class ConnectorStateClient
         {
             throw;
         }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("connector-state", ex);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "connector-state GET failed for scan {ScanId}", scanId);
@@ -168,6 +174,10 @@ public sealed class ConnectorStateClient
         catch (StateStorageException)
         {
             throw;
+        }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("connector-state", ex);
         }
         catch (Exception ex)
         {
@@ -259,6 +269,10 @@ public sealed class ConnectorStateClient
         catch (StateStorageException)
         {
             throw;
+        }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("connector-state", ex);
         }
         catch (Exception ex)
         {

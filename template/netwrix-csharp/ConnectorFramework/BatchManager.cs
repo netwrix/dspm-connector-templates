@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Netwrix.Overlord.Sdk.Core.Exceptions;
+using Polly.CircuitBreaker;
 
 namespace Netwrix.ConnectorFramework;
 
@@ -231,6 +233,10 @@ public sealed class BatchManager : IAsyncDisposable
             {
                 _logger.LogError("Batch flush returned {StatusCode} for table {Table}", (int)response.StatusCode, _tableName);
             }
+        }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("data-ingestion", ex);
         }
         catch (Exception ex)
         {
