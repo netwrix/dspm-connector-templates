@@ -300,21 +300,34 @@ class BatchManager:
 
 class Event:
     def __init__(self, execution_mode: str = "http"):
+        self._execution_mode = execution_mode
+        self._body = None
         if execution_mode == "http":
-            # HTTP mode: read from Flask request
-            self.body = request.get_data()
             self.headers = request.headers
             self.method = request.method
             self.query = request.args
             self.path = request.path
         else:
             # Job mode: read from REQUEST_DATA environment variable (equivalent to HTTP POST body)
-            request_data = os.getenv("REQUEST_DATA", "{}")
-            self.body = request_data.encode()
+            self._body = os.getenv("REQUEST_DATA", "{}").encode()
             self.headers = {}
             self.method = "POST"
             self.query = {}
             self.path = "/"
+
+    @property
+    def body(self):
+        if self._body is None:
+            self._body = request.get_data()
+        return self._body
+
+    @property
+    def stream(self):
+        if self._body is not None:
+            raise RuntimeError("Cannot access stream after body has been read")
+        if self._execution_mode != "http":
+            raise RuntimeError("Stream is only available in http mode")
+        return request.stream
 
 
 class Context:
