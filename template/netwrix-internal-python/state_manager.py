@@ -60,14 +60,16 @@ class StateManager:
 
     # Valid state transitions
     VALID_TRANSITIONS: dict[str, list] = {
-        "running": ["stopping", "pausing", "completed", "failed"],
+        "running": ["stopping", "pausing", "completed", "completed_with_errors", "failed", "cancelled"],
         "stopping": ["stopped", "failed"],
         "stopped": [],
         "pausing": ["paused", "failed"],
-        "paused": ["resuming", "failed", "stopped"],
+        "paused": ["resuming", "failed", "stopped", "cancelled"],
         "resuming": ["running", "failed"],
         "completed": [],
+        "completed_with_errors": [],
         "failed": [],
+        "cancelled": [],
     }
 
     # Default supported states (all connectors can support stop)

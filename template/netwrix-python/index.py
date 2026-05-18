@@ -900,6 +900,13 @@ def call_handler(path: str):
                     elif response_status == "paused":
                         ctx.update_execution(status="paused")
                         ctx.log.info("Scan was paused", function_type=ctx.function_type, status="paused")
+                    elif response_status == "completed_with_errors":
+                        ctx.update_execution(status="completed_with_errors", completed_at=completed_at)
+                        ctx.log.info(
+                            f"Completed {ctx.function_type} operation with errors",
+                            function_type=ctx.function_type,
+                            status="completed_with_errors",
+                        )
                     else:
                         ctx.update_execution(status="completed", completed_at=completed_at)
                         ctx.log.info(
@@ -1005,6 +1012,13 @@ def run_as_job():
                     elif response_status == "paused":
                         ctx.update_execution(status="paused", completed_at=completed_at)
                         ctx.log.info("Operation was paused", function_type=ctx.function_type, status="paused")
+                    elif response_status == "completed_with_errors":
+                        ctx.update_execution(status="completed_with_errors", completed_at=completed_at)
+                        ctx.log.info(
+                            f"Completed {ctx.function_type} operation with errors",
+                            function_type=ctx.function_type,
+                            status="completed_with_errors",
+                        )
                     else:
                         ctx.update_execution(status="completed", completed_at=completed_at)
                         ctx.log.info(
