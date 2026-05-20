@@ -230,25 +230,24 @@ class Context:
         if not self.scan_id:
             raise ValueError("scan_id must be set to retrieve connector state")
 
-        headers = {"Content-Type": "application/json", **self.get_caller_headers()}
+        headers = {**self.get_caller_headers()}
 
         service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
         url = get_service_url(service_name)
 
         response = requests.get(
-            url,
-            params={"scanId": self.scan_id},
+            f"{url}/{self.scan_id}",
             headers=headers,
             timeout=30,
         )
 
         if response.status_code == 200:
             result = response.json()
-            if result.get("success"):
-                self.log.info("Retrieved connector state successfully", key_count=len(result.get("data", {})))
-                return result.get("data", {})
-            error_msg = f"Failed to retrieve connector state: {result.get('error', 'Unknown error')}"
-            raise Exception(error_msg)
+            self.log.info("Retrieved connector state successfully", key_count=len(result))
+            return result
+
+        if response.status_code == 404:
+            return {}
 
         error_msg = f"Status {response.status_code}: {response.text}"
         raise Exception(error_msg)
@@ -273,27 +272,21 @@ class Context:
             raise ValueError("data must be a dictionary")
 
         try:
-            payload = {"scanId": self.scan_id, "data": data}
-
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
             service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
             url = get_service_url(service_name)
 
-            response = requests.post(
-                url,
-                json=payload,
+            response = requests.put(
+                f"{url}/{self.scan_id}",
+                json=data,
                 headers=headers,
                 timeout=30,
             )
 
             if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    self.log.info("Saved connector state successfully", key_count=len(data))
-                    return True, None
-                error_msg = f"Failed to save connector state: {result.get('error', 'Unknown error')}"
-                return False, error_msg
+                self.log.info("Saved connector state successfully", key_count=len(data))
+                return True, None
 
             error_msg = f"Status {response.status_code}: {response.text}"
             return False, error_msg
@@ -318,33 +311,32 @@ class Context:
             raise ValueError("scan_id must be set to delete connector state")
 
         try:
-            params: dict[str, str | list[str]] = {"scanId": self.scan_id}
-            if names:
-                params["name"] = names
-
-            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
-
             service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
             url = get_service_url(service_name)
+            headers = {**self.get_caller_headers()}
 
-            response = requests.delete(
-                url,
-                params=params,
-                headers=headers,
-                timeout=30,
-            )
+            if names:
+                headers["Content-Type"] = "application/json"
+                response = requests.delete(
+                    f"{url}/{self.scan_id}/keys",
+                    json=names,
+                    headers=headers,
+                    timeout=30,
+                )
+            else:
+                response = requests.delete(
+                    f"{url}/{self.scan_id}",
+                    headers=headers,
+                    timeout=30,
+                )
 
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("success"):
-                    log_attrs = {}
-                    if names:
-                        log_attrs["deleted_names"] = names
-                        log_attrs["deleted_count"] = len(names)
-                    self.log.info("Deleted connector state successfully", **log_attrs)
-                    return True, None
-                error_msg = f"Failed to delete connector state: {result.get('error', 'Unknown error')}"
-                return False, error_msg
+            if response.status_code in (200, 404):
+                log_attrs = {}
+                if names:
+                    log_attrs["deleted_names"] = names
+                    log_attrs["deleted_count"] = len(names)
+                self.log.info("Deleted connector state successfully", **log_attrs)
+                return True, None
 
             error_msg = f"Status {response.status_code}: {response.text}"
             return False, error_msg
