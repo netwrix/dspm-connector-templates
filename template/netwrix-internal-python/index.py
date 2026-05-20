@@ -273,19 +273,16 @@ class Context:
             raise ValueError("data must be a dictionary")
 
         try:
-            headers = {**self.get_caller_headers()}
+            payload = {"scanId": self.scan_id, "data": data}
+
+            headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
             service_name = os.getenv("CONNECTOR_STATE_FUNCTION", "connector-state")
             url = get_service_url(service_name)
 
-            # Send as multipart form: each key-value pair is a part,
-            # scanId is a query parameter.
-            files = {name: (None, str(value) if value is not None else "") for name, value in data.items()}
-
             response = requests.post(
                 url,
-                params={"scanId": self.scan_id},
-                files=files,
+                json=payload,
                 headers=headers,
                 timeout=30,
             )
