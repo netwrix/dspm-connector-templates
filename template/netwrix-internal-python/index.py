@@ -787,7 +787,7 @@ def run_as_job():
 def run_as_http_server():
     """Start Flask HTTP server for http mode."""
     port = os.getenv("PORT", 5000)
-    serve(app, host="0.0.0.0", port=port)
+    serve(app, host="0.0.0.0", port=port, max_request_body_size=10 * 1024 * 1024 * 1024)  # 10GB
 
 
 def main():
