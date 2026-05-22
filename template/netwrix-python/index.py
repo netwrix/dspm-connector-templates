@@ -479,6 +479,10 @@ class Context:
         if not isinstance(data, dict):
             raise ValueError("data must be a dictionary")
 
+        for key, value in data.items():
+            if not isinstance(value, str):
+                raise ValueError(f"All values must be strings; got {type(value).__name__} for key '{key}'")
+
         try:
             headers = {"Content-Type": "application/json", **self.get_caller_headers()}
 
