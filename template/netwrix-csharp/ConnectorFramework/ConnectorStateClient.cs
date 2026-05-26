@@ -189,6 +189,53 @@ public sealed class ConnectorStateClient
     }
 
     /// <summary>
+    /// Deletes all keys whose names match <paramref name="keyPrefix"/> for <paramref name="scanId"/>.
+    /// An empty prefix deletes all state for the scan.
+    /// </summary>
+    /// <param name="scanId">The scan whose state to delete.</param>
+    /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
+    /// <param name="keyPrefix">Prefix to match. Empty string deletes all state for the scan.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task DeleteByPrefixAsync(
+        string scanId, string? scanExecutionId, string keyPrefix, CancellationToken ct)
+    {
+        var url = string.IsNullOrEmpty(keyPrefix)
+            ? $"/{Uri.EscapeDataString(scanId)}"
+            : $"/{Uri.EscapeDataString(scanId)}/keys?prefix={Uri.EscapeDataString(keyPrefix)}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Delete, url);
+        AddPerRequestHeaders(request, scanId, scanExecutionId);
+
+        try
+        {
+            using var response = await _client.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode &&
+                response.StatusCode != System.Net.HttpStatusCode.NotFound)
+            {
+                throw new StateStorageException(
+                    $"connector-state DELETE returned {(int)response.StatusCode}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (StateStorageException)
+        {
+            throw;
+        }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("connector-state", ex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "connector-state DELETE failed for scan {ScanId}", scanId);
+            throw new StateStorageException($"connector-state DELETE failed for scan {scanId}", ex);
+        }
+    }
+
+    /// <summary>
     /// Writes (upserts) the key-value pairs in <paramref name="data"/> into the connector-state
     /// service for <paramref name="scanId"/>.
     /// </summary>
