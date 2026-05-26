@@ -243,10 +243,10 @@ public sealed class ConnectorStateClient
     /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
     /// <param name="data">Key-value pairs to upsert.</param>
     /// <param name="ct">Cancellation token.</param>
-    public async Task PutStateAsync(
+    public async Task PostStateAsync(
         string scanId, string? scanExecutionId, Dictionary<string, string> data, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Put, $"/{Uri.EscapeDataString(scanId)}")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/{Uri.EscapeDataString(scanId)}")
         {
             Content = new StringContent(
                 JsonSerializer.Serialize(data), Encoding.UTF8, "application/json"),
@@ -259,7 +259,7 @@ public sealed class ConnectorStateClient
             if (!response.IsSuccessStatusCode)
             {
                 throw new StateStorageException(
-                    $"connector-state PUT returned {(int)response.StatusCode}");
+                    $"connector-state POST returned {(int)response.StatusCode}");
             }
         }
         catch (OperationCanceledException)
@@ -276,8 +276,8 @@ public sealed class ConnectorStateClient
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "connector-state PUT failed for scan {ScanId}", scanId);
-            throw new StateStorageException($"connector-state PUT failed for scan {scanId}", ex);
+            _logger.LogError(ex, "connector-state POST failed for scan {ScanId}", scanId);
+            throw new StateStorageException($"connector-state POST failed for scan {scanId}", ex);
         }
     }
 

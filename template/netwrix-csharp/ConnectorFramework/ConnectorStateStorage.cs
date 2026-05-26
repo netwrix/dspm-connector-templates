@@ -188,7 +188,7 @@ public sealed class ConnectorStateStorage : IStateStorage
     // ── HTTP helpers ─────────────────────────────────────────────────────────
 
     private Task WriteStateAsync(Dictionary<string, string> data, CancellationToken ct)
-        => _stateClient.PutStateAsync(_scanId!, _scanExecutionId, data, ct);
+        => _stateClient.PostStateAsync(_scanId!, _scanExecutionId, data, ct);
 
     private Task DeleteStateAsync(string[] names, CancellationToken ct)
         => _stateClient.DeleteManyAsync(_scanId!, _scanExecutionId, names, ct);
