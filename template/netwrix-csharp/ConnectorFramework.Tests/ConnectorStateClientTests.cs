@@ -43,12 +43,12 @@ public class ConnectorStateClientTests
     }
 
     [Fact]
-    public async Task PostStateAsync_BrokenCircuit_ThrowsInfrastructureUnavailable()
+    public async Task PutStateAsync_BrokenCircuit_ThrowsInfrastructureUnavailable()
     {
         var client = CreateClientThrowing(new BrokenCircuitException("circuit open"));
 
         var ex = await Assert.ThrowsAsync<InfrastructureUnavailableException>(
-            () => client.PostStateAsync("scan-1", null, new Dictionary<string, string>(), CancellationToken.None));
+            () => client.PutStateAsync("scan-1", null, new Dictionary<string, string>(), CancellationToken.None));
 
         Assert.Contains("connector-state", ex.Message);
     }

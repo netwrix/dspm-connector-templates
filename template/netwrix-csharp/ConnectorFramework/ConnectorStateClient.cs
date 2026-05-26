@@ -18,11 +18,6 @@ public sealed class ConnectorStateClient
     /// <summary>Named client key used in both DI registration and singleton factory creation.</summary>
     public const string HttpClientName = "connector-state";
 
-    // Maximum query-string length for a single DELETE request. Each key becomes a &name=
-    // query parameter; splitting into batches prevents UriFormatException (.NET URI limit
-    // is ~65,519 chars) and respects typical proxy/nginx URL size limits (~8 KB).
-    internal const int MaxDeleteQueryLength = 4_000;
-
     private readonly HttpClient _client;
     private readonly ILogger<ConnectorStateClient> _logger;
 
@@ -44,14 +39,57 @@ public sealed class ConnectorStateClient
     public async Task<Dictionary<string, string>> GetStateAsync(
         string scanId, string? scanExecutionId, CancellationToken ct)
     {
-        using var doc = await OpenStateDocumentAsync(scanId, scanExecutionId, ct);
-        var root = doc.RootElement;
-        if (root.TryGetProperty("data", out var dataProp))
-        {
-            return dataProp.Deserialize<Dictionary<string, string>>() ?? new Dictionary<string, string>();
-        }
+        return await FetchStateAsync(scanId, scanExecutionId, ct);
+    }
 
-        return new Dictionary<string, string>();
+    /// <summary>
+    /// Returns all key names stored for <paramref name="scanId"/>, or an empty array if none exist.
+    /// </summary>
+    /// <param name="scanId">The scan whose state keys to list.</param>
+    /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<string[]> ListKeysAsync(
+        string scanId, string? scanExecutionId, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/{Uri.EscapeDataString(scanId)}/keys");
+        AddPerRequestHeaders(request, scanId, scanExecutionId);
+
+        try
+        {
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return [];
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new StateStorageException(
+                    $"connector-state GET keys returned {(int)response.StatusCode}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            return await JsonSerializer.DeserializeAsync<string[]>(stream, cancellationToken: ct)
+                ?? [];
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (StateStorageException)
+        {
+            throw;
+        }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("connector-state", ex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "connector-state GET keys failed for scan {ScanId}", scanId);
+            throw new StateStorageException($"connector-state GET keys failed for scan {scanId}", ex);
+        }
     }
 
     /// <summary>
@@ -65,28 +103,62 @@ public sealed class ConnectorStateClient
     public async Task<string?> GetStateValueAsync(
         string scanId, string? scanExecutionId, string key, CancellationToken ct)
     {
-        using var doc = await OpenStateDocumentAsync(scanId, scanExecutionId, ct);
-        var root = doc.RootElement;
-        if (root.TryGetProperty("data", out var dataProp) &&
-            dataProp.TryGetProperty(key, out var valueProp))
-        {
-            return valueProp.GetString();
-        }
-
-        return null;
-    }
-
-    private async Task<JsonDocument> OpenStateDocumentAsync(
-        string scanId, string? scanExecutionId, CancellationToken ct)
-    {
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            $"?scanId={Uri.EscapeDataString(scanId)}");
+            $"/{Uri.EscapeDataString(scanId)}/keys/{Uri.EscapeDataString(key)}");
         AddPerRequestHeaders(request, scanId, scanExecutionId);
 
         try
         {
             using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return null;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new StateStorageException(
+                    $"connector-state GET key returned {(int)response.StatusCode}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            var dict = await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(stream, cancellationToken: ct);
+            return dict?.TryGetValue(key, out var value) == true ? value : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (StateStorageException)
+        {
+            throw;
+        }
+        catch (BrokenCircuitException ex)
+        {
+            throw new InfrastructureUnavailableException("connector-state", ex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "connector-state GET key failed for scan {ScanId}, key {Key}", scanId, key);
+            throw new StateStorageException($"connector-state GET key failed for scan {scanId}", ex);
+        }
+    }
+
+    private async Task<Dictionary<string, string>> FetchStateAsync(
+        string scanId, string? scanExecutionId, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/{Uri.EscapeDataString(scanId)}");
+        AddPerRequestHeaders(request, scanId, scanExecutionId);
+
+        try
+        {
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return new Dictionary<string, string>();
+
             if (!response.IsSuccessStatusCode)
             {
                 throw new StateStorageException(
@@ -94,18 +166,8 @@ public sealed class ConnectorStateClient
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
-            var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("success", out var successProp) || !successProp.GetBoolean())
-            {
-                doc.Dispose();
-                var error = root.TryGetProperty("error", out var errProp)
-                    ? errProp.GetString() : "Unknown error";
-                throw new StateStorageException($"connector-state GET failed: {error}");
-            }
-
-            return doc;
+            return await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(stream, cancellationToken: ct)
+                ?? new Dictionary<string, string>();
         }
         catch (OperationCanceledException)
         {
@@ -134,14 +196,13 @@ public sealed class ConnectorStateClient
     /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
     /// <param name="data">Key-value pairs to upsert.</param>
     /// <param name="ct">Cancellation token.</param>
-    public async Task PostStateAsync(
+    public async Task PutStateAsync(
         string scanId, string? scanExecutionId, Dictionary<string, string> data, CancellationToken ct)
     {
-        var payload = new { scanId, data };
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/")
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"/{Uri.EscapeDataString(scanId)}")
         {
             Content = new StringContent(
-                JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"),
+                JsonSerializer.Serialize(data), Encoding.UTF8, "application/json"),
         };
         AddPerRequestHeaders(request, scanId, scanExecutionId);
 
@@ -151,20 +212,7 @@ public sealed class ConnectorStateClient
             if (!response.IsSuccessStatusCode)
             {
                 throw new StateStorageException(
-                    $"connector-state POST returned {(int)response.StatusCode}");
-            }
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrWhiteSpace(body))
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("success", out var successProp) && !successProp.GetBoolean())
-                {
-                    var error = root.TryGetProperty("error", out var errProp)
-                        ? errProp.GetString() : "Unknown error";
-                    throw new StateStorageException($"connector-state POST failed: {error}");
-                }
+                    $"connector-state PUT returned {(int)response.StatusCode}");
             }
         }
         catch (OperationCanceledException)
@@ -181,16 +229,14 @@ public sealed class ConnectorStateClient
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "connector-state POST failed for scan {ScanId}", scanId);
-            throw new StateStorageException($"connector-state POST failed for scan {scanId}", ex);
+            _logger.LogError(ex, "connector-state PUT failed for scan {ScanId}", scanId);
+            throw new StateStorageException($"connector-state PUT failed for scan {scanId}", ex);
         }
     }
 
     /// <summary>
-    /// Deletes all <paramref name="names"/> from the connector-state service, automatically
-    /// splitting into URL-length-bounded batches to avoid <see cref="UriFormatException"/>
-    /// when key count or key length would produce a query string exceeding
-    /// <see cref="MaxDeleteQueryLength"/> characters.
+    /// Deletes all <paramref name="names"/> from the connector-state service for
+    /// <paramref name="scanId"/>.
     /// </summary>
     /// <param name="scanId">The scan whose state keys should be deleted.</param>
     /// <param name="scanExecutionId">Optional execution ID forwarded as a request header for tracing.</param>
@@ -199,67 +245,25 @@ public sealed class ConnectorStateClient
     public async Task DeleteManyAsync(
         string scanId, string? scanExecutionId, string[] names, CancellationToken ct)
     {
-        var baseQs = $"?scanId={Uri.EscapeDataString(scanId)}";
-        var sb = new StringBuilder();
+        if (names.Length == 0)
+            return;
 
-        var i = 0;
-        while (i < names.Length)
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete, $"/{Uri.EscapeDataString(scanId)}/keys")
         {
-            sb.Clear();
-            sb.Append(baseQs);
-            var batchStart = i;
-
-            while (i < names.Length)
-            {
-                var escaped = $"&name={Uri.EscapeDataString(names[i])}";
-                // If adding this key would exceed the limit AND we already have at least one key
-                // in the batch, flush now. A single key that is longer than the limit is sent
-                // alone (can't split further).
-                if (sb.Length + escaped.Length > MaxDeleteQueryLength && i > batchStart)
-                {
-                    break;
-                }
-
-                sb.Append(escaped);
-                i++;
-            }
-
-            _logger.LogDebug(
-                "Deleting state keys {Start}–{End} of {Total} for scan {ScanId}",
-                batchStart, i - 1, names.Length, scanId);
-
-            await SendDeleteAsync(scanId, scanExecutionId, sb.ToString(), ct);
-        }
-    }
-
-    // ── Private HTTP helpers ─────────────────────────────────────────────────
-
-    private async Task SendDeleteAsync(
-        string scanId, string? scanExecutionId, string queryString, CancellationToken ct)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Delete, queryString);
+            Content = new StringContent(
+                JsonSerializer.Serialize(names), Encoding.UTF8, "application/json"),
+        };
         AddPerRequestHeaders(request, scanId, scanExecutionId);
 
         try
         {
             using var response = await _client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode &&
+                response.StatusCode != System.Net.HttpStatusCode.NotFound)
             {
                 throw new StateStorageException(
                     $"connector-state DELETE returned {(int)response.StatusCode}");
-            }
-
-            var body = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrWhiteSpace(body))
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("success", out var successProp) && !successProp.GetBoolean())
-                {
-                    var error = root.TryGetProperty("error", out var errProp)
-                        ? errProp.GetString() : "Unknown error";
-                    throw new StateStorageException($"connector-state DELETE failed: {error}");
-                }
             }
         }
         catch (OperationCanceledException)

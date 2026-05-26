@@ -167,9 +167,9 @@ public sealed class ConnectorStateStorage : IStateStorage
             yield break;
         }
 
-        var allState = await FetchAllStateAsync(cancellationToken);
+        var allKeys = await _stateClient.ListKeysAsync(_scanId!, _scanExecutionId, cancellationToken);
 
-        foreach (var key in allState.Keys
+        foreach (var key in allKeys
             .Where(k => MatchesPrefix(k, keyPrefix))
             .Order(StringComparer.Ordinal))
         {
@@ -202,7 +202,7 @@ public sealed class ConnectorStateStorage : IStateStorage
         => _stateClient.GetStateAsync(_scanId!, _scanExecutionId, ct);
 
     private Task WriteStateAsync(Dictionary<string, string> data, CancellationToken ct)
-        => _stateClient.PostStateAsync(_scanId!, _scanExecutionId, data, ct);
+        => _stateClient.PutStateAsync(_scanId!, _scanExecutionId, data, ct);
 
     private Task DeleteStateAsync(string[] names, CancellationToken ct)
         => _stateClient.DeleteManyAsync(_scanId!, _scanExecutionId, names, ct);
