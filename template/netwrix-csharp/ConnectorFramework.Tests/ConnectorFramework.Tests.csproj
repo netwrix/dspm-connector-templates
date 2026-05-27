@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
-    <NoWarn>CA2007;CA2016;CA2201</NoWarn>
+    <NoWarn>CA2007;CA2016;CA2201;CA1852</NoWarn>
     <RootNamespace>Netwrix.ConnectorFramework.Tests</RootNamespace>
   </PropertyGroup>
 

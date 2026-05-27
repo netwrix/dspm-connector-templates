@@ -45,18 +45,20 @@ public class ConnectorStateStorageTests
     private static ConnectorStateStorage CreateStorage(ConnectorStateClient client, string? scanId = "scan-test")
         => new(MakeRequest(scanId), client, NullLogger<ConnectorStateStorage>.Instance);
 
-    private static string StateResponse(Dictionary<string, string> data)
-        => JsonSerializer.Serialize(new { success = true, data });
+    /// <summary>Flat JSON dict — the format returned by GET /{scanId} and GET /{scanId}/keys/{key}.</summary>
+    private static string FlatState(Dictionary<string, string> data)
+        => JsonSerializer.Serialize(data);
 
-    private static string EmptyStateResponse()
-        => JsonSerializer.Serialize(new { success = true, data = new Dictionary<string, string>() });
+    /// <summary>JSON array — the format returned by GET /{scanId}/keys.</summary>
+    private static string KeyList(params string[] keys)
+        => JsonSerializer.Serialize(keys);
 
     // ── TryGetAsync ──────────────────────────────────────────────────────────
 
     [Fact]
     public async Task TryGetAsync_ReturnsNotFound_WhenKeyAbsent()
     {
-        var storage = CreateStorage(CreateClient(EmptyStateResponse()));
+        var storage = CreateStorage(CreateClient("{}", HttpStatusCode.NotFound));
 
         var result = await storage.TryGetAsync<string>("missing");
 
@@ -66,11 +68,8 @@ public class ConnectorStateStorageTests
     [Fact]
     public async Task TryGetAsync_ReturnsValue_WhenFound()
     {
-        var stateData = new Dictionary<string, string>
-        {
-            ["myKey"] = "\"hello\"",
-        };
-        var storage = CreateStorage(CreateClient(StateResponse(stateData)));
+        var stateData = new Dictionary<string, string> { ["myKey"] = "\"hello\"" };
+        var storage = CreateStorage(CreateClient(FlatState(stateData)));
 
         var result = await storage.TryGetAsync<string>("myKey");
 
@@ -132,6 +131,7 @@ public class ConnectorStateStorageTests
         var json = Encoding.UTF8.GetString(capturedBody!);
         Assert.Contains("\"cursor\"", json);
         Assert.Contains("page-5", json);
+        Assert.DoesNotContain("scanId", json);
         Assert.DoesNotContain("__etag__", json);
     }
 
@@ -179,6 +179,7 @@ public class ConnectorStateStorageTests
         var json = Encoding.UTF8.GetString(capturedBody!);
         Assert.Contains("\"bookmark\"", json);
         Assert.Contains("value-new", json);
+        Assert.DoesNotContain("scanId", json);
         Assert.Equal(string.Empty, result);
     }
 
@@ -188,17 +189,19 @@ public class ConnectorStateStorageTests
     public async Task DeleteAsync_ReturnsTrueAndIssuesDelete()
     {
         HttpMethod? deleteMethod = null;
-        string? deleteUrl = null;
+        string? deletePath = null;
+        string? deleteBody = null;
         var handlerMock = new Mock<HttpMessageHandler>();
         handlerMock.Protected()
             .Setup<Task<HttpResponseMessage>>("SendAsync",
                 ItExpr.IsAny<HttpRequestMessage>(),
                 ItExpr.IsAny<CancellationToken>())
-            .Returns<HttpRequestMessage, CancellationToken>((req, _) =>
+            .Returns<HttpRequestMessage, CancellationToken>(async (req, _) =>
             {
                 deleteMethod = req.Method;
-                deleteUrl = req.RequestUri!.ToString();
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+                deletePath = req.RequestUri!.AbsolutePath;
+                deleteBody = req.Content is not null ? await req.Content.ReadAsStringAsync() : null;
+                return new HttpResponseMessage(HttpStatusCode.OK);
             });
         var storage = CreateStorage(CreateClient(handlerMock.Object));
 
@@ -206,8 +209,9 @@ public class ConnectorStateStorageTests
 
         Assert.True(deleted);
         Assert.Equal(HttpMethod.Delete, deleteMethod);
-        Assert.NotNull(deleteUrl);
-        Assert.Contains("name=target", deleteUrl);
+        Assert.Equal("/scan-test/keys", deletePath);
+        Assert.NotNull(deleteBody);
+        Assert.Contains("target", deleteBody);
     }
 
     [Fact]
@@ -237,159 +241,54 @@ public class ConnectorStateStorageTests
     // ── DeleteAllAsync ────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task DeleteAllAsync_IssuesDeleteForPrefixMatchingKeys()
+    public async Task DeleteAllAsync_IssuesSingleDeleteWithPrefixQuery()
     {
-        var stateData = new Dictionary<string, string>
-        {
-            ["source/abc/bookmark"] = "\"v1\"",
-            ["source/abc/cursor"] = "\"v2\"",
-            ["other/key"] = "\"v3\"",
-        };
-        var deleteRequests = new List<string>();
+        HttpMethod? deleteMethod = null;
+        string? deletePath = null;
+        string? deleteQuery = null;
         var handlerMock = new Mock<HttpMessageHandler>();
-        var callIndex = 0;
         handlerMock.Protected()
             .Setup<Task<HttpResponseMessage>>("SendAsync",
                 ItExpr.IsAny<HttpRequestMessage>(),
                 ItExpr.IsAny<CancellationToken>())
             .Returns<HttpRequestMessage, CancellationToken>((req, _) =>
             {
-                if (callIndex++ == 0)
-                {
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
-                    });
-                }
-                deleteRequests.Add(req.RequestUri!.ToString());
+                deleteMethod = req.Method;
+                deletePath = req.RequestUri!.AbsolutePath;
+                deleteQuery = req.RequestUri.Query;
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
         var storage = CreateStorage(CreateClient(handlerMock.Object));
 
         await storage.DeleteAllAsync("source/abc");
 
-        Assert.Single(deleteRequests);
-        var deleteUrl = deleteRequests[0];
-        Assert.True(deleteUrl.Contains("bookmark") && deleteUrl.Contains("cursor"),
-            $"Expected both bookmark and cursor in DELETE url: {deleteUrl}");
-        Assert.DoesNotContain("other%2Fkey", deleteUrl);
-        Assert.DoesNotContain("other/key", deleteUrl);
+        Assert.Equal(HttpMethod.Delete, deleteMethod);
+        Assert.Equal("/scan-test/keys", deletePath);
+        Assert.Contains("prefix=source%2Fabc", deleteQuery);
     }
 
     [Fact]
-    public async Task DeleteAllAsync_BatchesDeleteRequests_WhenUrlLengthWouldExceedLimit()
+    public async Task DeleteAllAsync_EmptyPrefix_DeletesAllState()
     {
-        // ConnectorStateClient.DeleteManyAsync batches by URL length (MaxDeleteQueryLength = 4,000)
-        // rather than by a fixed key count. This prevents UriFormatException for long key names
-        // and respects proxy URL size limits.
-        //
-        // Key format: "source/abc/item-NNNNNN" (22 chars, URL-encoded to 26 chars due to '/' → '%2F').
-        // Per-key query segment: "&name=" (6) + 26 = 32 chars.
-        // Base: "?scanId=scan-test" = 18 chars. Available per batch: 4,000 - 18 = 3,982.
-        // Keys per batch: floor(3,982 / 32) = 124. For 300 keys: ceil(300 / 124) = 3 batches.
-        const int keyCount = 300;
-        const string prefix = "source/abc";
-
-        var stateData = Enumerable.Range(0, keyCount)
-            .ToDictionary(i => $"{prefix}/item-{i:D6}", _ => "\"v\"");
-
-        var deleteRequests = new List<string>();
+        HttpMethod? deleteMethod = null;
+        string? deletePath = null;
         var handlerMock = new Mock<HttpMessageHandler>();
-        var callIndex = 0;
         handlerMock.Protected()
             .Setup<Task<HttpResponseMessage>>("SendAsync",
                 ItExpr.IsAny<HttpRequestMessage>(),
                 ItExpr.IsAny<CancellationToken>())
             .Returns<HttpRequestMessage, CancellationToken>((req, _) =>
             {
-                if (callIndex++ == 0)
-                {
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
-                    });
-                }
-                deleteRequests.Add(req.RequestUri!.ToString());
+                deleteMethod = req.Method;
+                deletePath = req.RequestUri!.AbsolutePath;
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             });
         var storage = CreateStorage(CreateClient(handlerMock.Object));
 
-        await storage.DeleteAllAsync(prefix);
+        await storage.DeleteAllAsync("");
 
-        Assert.Equal(3, deleteRequests.Count);
-
-        // No single batch URL's query portion should exceed MaxDeleteQueryLength
-        const string baseUrl = "http://connector-state/";
-        foreach (var url in deleteRequests)
-        {
-            var queryLength = url.Length - baseUrl.Length;
-            Assert.True(
-                queryLength <= ConnectorStateClient.MaxDeleteQueryLength,
-                $"Batch query exceeded {ConnectorStateClient.MaxDeleteQueryLength} chars ({queryLength}): {url[..Math.Min(200, url.Length)]}");
-        }
-
-        // Every key must appear in exactly one batch
-        var allDeletedKeys = deleteRequests
-            .SelectMany(url => url.Split('&')
-                .Where(p => p.StartsWith("name=", StringComparison.Ordinal))
-                .Select(p => Uri.UnescapeDataString(p["name=".Length..])))
-            .ToHashSet();
-        Assert.Equal(keyCount, allDeletedKeys.Count);
-        Assert.All(stateData.Keys, k => Assert.Contains(k, allDeletedKeys));
-    }
-
-    [Fact]
-    public async Task DeleteAllAsync_CompletesSafely_WhenTotalUrlWouldExceedNetUriLimit()
-    {
-        // Without URL-length-based batching, a single DELETE with these 100 keys would produce
-        // a query string of ~72,018 chars, exceeding .NET's ~65,519-char URI limit and throwing
-        // System.UriFormatException: Invalid URI: The Uri string is too long.
-        //
-        // Key format: "source/abc/" (11 chars) + 694 'a's + 5-digit index = 710 chars.
-        // URL-encoded: "source%2Fabc%2F" (15) + 694 + 5 = 714 chars.
-        // Per-key query segment: "&name=" (6) + 714 = 720 chars.
-        // 100 keys unbatched: 18 + 100 × 720 = 72,018 chars → UriFormatException.
-        // With MaxDeleteQueryLength = 4,000: floor((4,000-18)/720) = 5 keys/batch → 20 batches.
-        const int keyCount = 100;
-        const string prefix = "source/abc";
-
-        var stateData = Enumerable.Range(0, keyCount)
-            .ToDictionary(i => $"{prefix}/{new string('a', 694)}{i:D5}", _ => "\"v\"");
-
-        var deleteRequests = new List<string>();
-        var handlerMock = new Mock<HttpMessageHandler>();
-        var callIndex = 0;
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .Returns<HttpRequestMessage, CancellationToken>((req, _) =>
-            {
-                if (callIndex++ == 0)
-                {
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
-                    });
-                }
-                deleteRequests.Add(req.RequestUri!.ToString());
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-            });
-        var storage = CreateStorage(CreateClient(handlerMock.Object));
-
-        await storage.DeleteAllAsync(prefix);
-
-        // Completed without UriFormatException — multiple batches were required
-        Assert.True(deleteRequests.Count > 1, "Expected more than one DELETE batch for long-key workload");
-
-        // Every key must appear in exactly one batch
-        var allDeletedKeys = deleteRequests
-            .SelectMany(url => url.Split('&')
-                .Where(p => p.StartsWith("name=", StringComparison.Ordinal))
-                .Select(p => Uri.UnescapeDataString(p["name=".Length..])))
-            .ToHashSet();
-        Assert.Equal(keyCount, allDeletedKeys.Count);
-        Assert.All(stateData.Keys, k => Assert.Contains(k, allDeletedKeys));
+        Assert.Equal(HttpMethod.Delete, deleteMethod);
+        Assert.Equal("/scan-test", deletePath);
     }
 
     // ── ListAllKeysAsync ──────────────────────────────────────────────────────
@@ -397,13 +296,7 @@ public class ConnectorStateStorageTests
     [Fact]
     public async Task ListAllKeysAsync_ReturnsKeys_MatchingPrefix()
     {
-        var stateData = new Dictionary<string, string>
-        {
-            ["a/x"] = "\"1\"",
-            ["a/y"] = "\"2\"",
-            ["b/z"] = "\"3\"",
-        };
-        var storage = CreateStorage(CreateClient(StateResponse(stateData)));
+        var storage = CreateStorage(CreateClient(KeyList("a/x", "a/y", "b/z")));
 
         var keys = new List<string>();
         await foreach (var k in storage.ListAllKeysAsync("a"))
@@ -444,14 +337,12 @@ public class ConnectorStateStorageTests
     [Fact]
     public async Task ListKeysAsync_ReturnsKeysAtCorrectDepth()
     {
-        var stateData = new Dictionary<string, string>
-        {
-            ["src/tenant/site/bookmark"] = "\"v\"",
-            ["src/tenant/site/cursor"] = "\"v\"",
-            ["src/tenant/other/bookmark"] = "\"v\"",
-            ["src/tenant/bookmark"] = "\"v\"", // depth=1 from src/tenant
-        };
-        var storage = CreateStorage(CreateClient(StateResponse(stateData)));
+        var allKeys = KeyList(
+            "src/tenant/bookmark",
+            "src/tenant/other/bookmark",
+            "src/tenant/site/bookmark",
+            "src/tenant/site/cursor");
+        var storage = CreateStorage(CreateClient(allKeys));
 
         var depth1 = new List<string>();
         await foreach (var k in storage.ListKeysAsync("src/tenant", depth: 1))
@@ -483,7 +374,7 @@ public class ConnectorStateStorageTests
             .Returns<HttpRequestMessage, CancellationToken>((_, _) =>
                 Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
+                    Content = new StringContent(FlatState(stateData), Encoding.UTF8, "application/json"),
                 }));
         var storage = CreateStorage(CreateClient(handlerMock.Object));
 
@@ -496,8 +387,10 @@ public class ConnectorStateStorageTests
     }
 
     [Fact]
-    public async Task TryGetAsync_AndDeleteAllAsync_IssueIndependentGets()
+    public async Task TryGetAsync_AndDeleteAllAsync_IssueIndependentRequests()
     {
+        // TryGetAsync issues one GET; DeleteAllAsync now issues one DELETE directly
+        // (no GET to fetch state first), so total GET count should be 1.
         var stateData = new Dictionary<string, string>
         {
             ["prefix/a"] = "\"v\"",
@@ -518,7 +411,7 @@ public class ConnectorStateStorageTests
 
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(StateResponse(stateData), Encoding.UTF8, "application/json"),
+                    Content = new StringContent(FlatState(stateData), Encoding.UTF8, "application/json"),
                 });
             });
         var storage = CreateStorage(CreateClient(handlerMock.Object));
@@ -526,7 +419,7 @@ public class ConnectorStateStorageTests
         await storage.TryGetAsync<string>("prefix/a");
         await storage.DeleteAllAsync("prefix");
 
-        Assert.Equal(2, getCount);
+        Assert.Equal(1, getCount);
     }
 
     // ── GetStateValueAsync ────────────────────────────────────────────────────
@@ -534,8 +427,7 @@ public class ConnectorStateStorageTests
     [Fact]
     public async Task GetStateValueAsync_ReturnsNull_WhenKeyAbsent()
     {
-        var stateData = new Dictionary<string, string> { ["other"] = "\"v\"" };
-        var client = CreateClient(StateResponse(stateData));
+        var client = CreateClient("{}", HttpStatusCode.NotFound);
 
         var result = await client.GetStateValueAsync("scan-id", null, "missing", CancellationToken.None);
 
