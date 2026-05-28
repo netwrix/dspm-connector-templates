@@ -62,7 +62,7 @@ public class ResilienceRegistrationTests
             sequence = sequence.ReturnsAsync(() => new HttpResponseMessage(captured)
             {
                 Content = new StringContent(
-                    """{"success":true,"data":{}}""",
+                    "{}",
                     System.Text.Encoding.UTF8,
                     "application/json"),
             });

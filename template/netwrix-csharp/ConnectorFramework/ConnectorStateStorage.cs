@@ -126,18 +126,7 @@ public sealed class ConnectorStateStorage : IStateStorage
             return;
         }
 
-        var allState = await FetchAllStateAsync(cancellationToken);
-
-        var toDelete = allState.Keys
-            .Where(k => MatchesPrefix(k, keyPrefix))
-            .ToArray();
-
-        if (toDelete.Length == 0)
-        {
-            return;
-        }
-
-        await DeleteStateAsync(toDelete, cancellationToken);
+        await _stateClient.DeleteByPrefixAsync(_scanId!, _scanExecutionId, keyPrefix, cancellationToken);
     }
 
     public IAsyncEnumerable<string> ListAllKeysAsync(string keyPrefix = "", CancellationToken cancellationToken = default)
@@ -167,9 +156,9 @@ public sealed class ConnectorStateStorage : IStateStorage
             yield break;
         }
 
-        var allState = await FetchAllStateAsync(cancellationToken);
+        var allKeys = await _stateClient.ListKeysAsync(_scanId!, _scanExecutionId, cancellationToken);
 
-        foreach (var key in allState.Keys
+        foreach (var key in allKeys
             .Where(k => MatchesPrefix(k, keyPrefix))
             .Order(StringComparer.Ordinal))
         {
@@ -197,9 +186,6 @@ public sealed class ConnectorStateStorage : IStateStorage
     }
 
     // ── HTTP helpers ─────────────────────────────────────────────────────────
-
-    private Task<Dictionary<string, string>> FetchAllStateAsync(CancellationToken ct)
-        => _stateClient.GetStateAsync(_scanId!, _scanExecutionId, ct);
 
     private Task WriteStateAsync(Dictionary<string, string> data, CancellationToken ct)
         => _stateClient.PostStateAsync(_scanId!, _scanExecutionId, data, ct);
