@@ -18,7 +18,7 @@ public sealed class BatchManager : IAsyncDisposable
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ConnectorRequestData _requestData;
     private readonly ILogger<BatchManager> _logger;
-    private readonly Func<int, CancellationToken, Task>? _onFlushed;
+    private readonly Func<CancellationToken, Task>? _onFlushed;
 
     private readonly Channel<(byte[] Data, int Count, CancellationToken Ct)> _flushChannel;
     private readonly Task _flushWorker;
@@ -33,7 +33,7 @@ public sealed class BatchManager : IAsyncDisposable
         IHttpClientFactory httpClientFactory,
         ConnectorRequestData requestData,
         ILogger<BatchManager> logger,
-        Func<int, CancellationToken, Task>? onFlushed = null)
+        Func<CancellationToken, Task>? onFlushed = null)
     {
         _tableName = tableName;
         _httpClientFactory = httpClientFactory;
@@ -224,9 +224,9 @@ public sealed class BatchManager : IAsyncDisposable
                 ConnectorMetrics.BatchSize.Record(count, tableTag);
                 ConnectorMetrics.ObjectsUploaded.Add(count, tableTag);
 
-                if (_onFlushed is not null && count > 0)
+                if (_onFlushed is not null)
                 {
-                    await _onFlushed(count, ct);
+                    await _onFlushed(ct);
                 }
             }
             else

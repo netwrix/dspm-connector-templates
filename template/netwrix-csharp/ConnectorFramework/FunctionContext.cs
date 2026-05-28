@@ -143,7 +143,17 @@ public sealed class FunctionContext : IFunctionContext, IScanWriter, IScanProgre
             _httpClientFactory,
             Request,
             _loggerFactory.CreateLogger<BatchManager>(),
-            onFlushed: (count, ct) => UpdateExecutionAsync(incrementCompletedObjects: count, ct: ct)));
+            // Heartbeat only — must NOT report row counts. BatchManager flushes every table
+            // (including relation tables, not just entities), so adding row counts here would
+            // inflate scan_executions.completed_objects — bug 433344. The authoritative count
+            // comes from CrawlResponse.ProcessedItemCount via EnsureRegularTaskProgressUpdate /
+            // FinalizeScan, which the connector gates to entities only.
+            //
+            // We still fire the callback (idempotent status="running" write) to bump updated_at
+            // during the post-iteration drain in FlushTablesAsync, where no other call is made
+            // and a long upload could otherwise hit the 4-hour StuckExecutionRecoveryJob timeout.
+            // status is required because app-update-execution rejects payloads with no fields.
+            onFlushed: ct => UpdateExecutionAsync(status: ScanStatus.Running, ct: ct)));
 
     /// <summary>
     /// Adds an object to the named table's batch buffer.

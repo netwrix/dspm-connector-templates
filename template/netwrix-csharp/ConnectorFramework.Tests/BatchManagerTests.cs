@@ -16,7 +16,7 @@ public class BatchManagerTests
 
     private static BatchManager CreateBatchManager(
         IHttpClientFactory? httpFactory = null,
-        Func<int, CancellationToken, Task>? onFlushed = null)
+        Func<CancellationToken, Task>? onFlushed = null)
     {
         httpFactory ??= Mock.Of<IHttpClientFactory>();
         return new BatchManager(
@@ -116,13 +116,13 @@ public class BatchManagerTests
     }
 
     [Fact]
-    public async Task OnFlushed_CalledWithCorrectCount_AfterSuccessfulFlush()
+    public async Task OnFlushed_CalledOnce_AfterSuccessfulFlush()
     {
         var (_, factory) = CreateSuccessFactory();
-        int? flushedCount = null;
-        Func<int, CancellationToken, Task> onFlushed = (count, _) =>
+        var callCount = 0;
+        Func<CancellationToken, Task> onFlushed = _ =>
         {
-            flushedCount = count;
+            callCount++;
             return Task.CompletedTask;
         };
 
@@ -133,7 +133,7 @@ public class BatchManagerTests
 
         await bm.FlushAsync();
 
-        Assert.Equal(3, flushedCount);
+        Assert.Equal(1, callCount);
     }
 
     [Fact]
@@ -141,7 +141,7 @@ public class BatchManagerTests
     {
         var (_, factory) = CreateSuccessFactory();
         var called = false;
-        Func<int, CancellationToken, Task> onFlushed = (_, _) =>
+        Func<CancellationToken, Task> onFlushed = _ =>
         {
             called = true;
             return Task.CompletedTask;
@@ -154,13 +154,16 @@ public class BatchManagerTests
     }
 
     [Fact]
-    public async Task AddObject_UpdateStatusFalse_DoesNotCountObject()
+    public async Task OnFlushed_CalledAsHeartbeat_EvenWhenAllObjectsHaveUpdateStatusFalse()
     {
+        // The onFlushed callback is a per-batch heartbeat (bumps updated_at), so it must fire on
+        // every successful upload — even for batches whose objects were all added with
+        // updateStatus:false (e.g. the crawl_completions table).
         var (_, factory) = CreateSuccessFactory();
-        int? flushedCount = null;
-        Func<int, CancellationToken, Task> onFlushed = (count, _) =>
+        var callCount = 0;
+        Func<CancellationToken, Task> onFlushed = _ =>
         {
-            flushedCount = count;
+            callCount++;
             return Task.CompletedTask;
         };
 
@@ -170,29 +173,7 @@ public class BatchManagerTests
 
         await bm.FlushAsync();
 
-        // count was 0 so onFlushed should not be called
-        Assert.Null(flushedCount);
-    }
-
-    [Fact]
-    public async Task AddObject_MixedUpdateStatus_CountsOnlyStatusTrue()
-    {
-        var (_, factory) = CreateSuccessFactory();
-        int? flushedCount = null;
-        Func<int, CancellationToken, Task> onFlushed = (count, _) =>
-        {
-            flushedCount = count;
-            return Task.CompletedTask;
-        };
-
-        await using var bm = new BatchManager("t", factory, MakeRequest(), NullLogger<BatchManager>.Instance, onFlushed);
-        bm.AddObject(new { x = 1 }, updateStatus: true);
-        bm.AddObject(new { x = 2 }, updateStatus: false);
-        bm.AddObject(new { x = 3 }, updateStatus: true);
-
-        await bm.FlushAsync();
-
-        Assert.Equal(2, flushedCount);
+        Assert.Equal(1, callCount);
     }
 
     [Fact]
@@ -273,7 +254,7 @@ public class BatchManagerTests
         factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
 
         var called = false;
-        Func<int, CancellationToken, Task> onFlushed = (_, _) =>
+        Func<CancellationToken, Task> onFlushed = _ =>
         {
             called = true;
             return Task.CompletedTask;
