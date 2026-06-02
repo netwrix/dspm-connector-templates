@@ -18,7 +18,6 @@ public sealed class BatchManager : IAsyncDisposable
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ConnectorRequestData _requestData;
     private readonly ILogger<BatchManager> _logger;
-    private readonly Func<CancellationToken, Task>? _onFlushed;
 
     private readonly Channel<(byte[] Data, int Count, CancellationToken Ct)> _flushChannel;
     private readonly Task _flushWorker;
@@ -32,14 +31,12 @@ public sealed class BatchManager : IAsyncDisposable
         string tableName,
         IHttpClientFactory httpClientFactory,
         ConnectorRequestData requestData,
-        ILogger<BatchManager> logger,
-        Func<CancellationToken, Task>? onFlushed = null)
+        ILogger<BatchManager> logger)
     {
         _tableName = tableName;
         _httpClientFactory = httpClientFactory;
         _requestData = requestData;
         _logger = logger;
-        _onFlushed = onFlushed;
 
         _buffer = NewBuffer();
 
@@ -115,7 +112,6 @@ public sealed class BatchManager : IAsyncDisposable
         if (_buffer.Length > 1)
         {
             var snapshot = FinaliseBuffer();
-            // Propagate ct so the _onFlushed callback (progress reporting) respects cancellation.
             if (!_flushChannel.Writer.TryWrite((snapshot.Data, snapshot.Count, ct)))
             {
                 throw new InvalidOperationException(
@@ -223,11 +219,6 @@ public sealed class BatchManager : IAsyncDisposable
                 var tableTag = new KeyValuePair<string, object?>("table", _tableName);
                 ConnectorMetrics.BatchSize.Record(count, tableTag);
                 ConnectorMetrics.ObjectsUploaded.Add(count, tableTag);
-
-                if (_onFlushed is not null)
-                {
-                    await _onFlushed(ct);
-                }
             }
             else
             {

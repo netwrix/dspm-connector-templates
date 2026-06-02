@@ -14,17 +14,14 @@ public class BatchManagerTests
         => new("POST", "/connector/access_scan", new Dictionary<string, string>(), null,
             new ExecutionContext(ScanId: scanId, ScanExecutionId: execId, SourceId: null, SourceType: null, SourceVersion: null, FunctionType: null));
 
-    private static BatchManager CreateBatchManager(
-        IHttpClientFactory? httpFactory = null,
-        Func<CancellationToken, Task>? onFlushed = null)
+    private static BatchManager CreateBatchManager(IHttpClientFactory? httpFactory = null)
     {
         httpFactory ??= Mock.Of<IHttpClientFactory>();
         return new BatchManager(
             "test_table",
             httpFactory,
             MakeRequest(),
-            NullLogger<BatchManager>.Instance,
-            onFlushed);
+            NullLogger<BatchManager>.Instance);
     }
 
     private static (Mock<HttpMessageHandler> HandlerMock, IHttpClientFactory Factory) CreateSuccessFactory(
@@ -116,67 +113,6 @@ public class BatchManagerTests
     }
 
     [Fact]
-    public async Task OnFlushed_CalledOnce_AfterSuccessfulFlush()
-    {
-        var (_, factory) = CreateSuccessFactory();
-        var callCount = 0;
-        Func<CancellationToken, Task> onFlushed = _ =>
-        {
-            callCount++;
-            return Task.CompletedTask;
-        };
-
-        await using var bm = new BatchManager("t", factory, MakeRequest(), NullLogger<BatchManager>.Instance, onFlushed);
-        bm.AddObject(new { x = 1 });
-        bm.AddObject(new { x = 2 });
-        bm.AddObject(new { x = 3 });
-
-        await bm.FlushAsync();
-
-        Assert.Equal(1, callCount);
-    }
-
-    [Fact]
-    public async Task OnFlushed_NotCalled_WhenNoObjects()
-    {
-        var (_, factory) = CreateSuccessFactory();
-        var called = false;
-        Func<CancellationToken, Task> onFlushed = _ =>
-        {
-            called = true;
-            return Task.CompletedTask;
-        };
-
-        await using var bm = new BatchManager("t", factory, MakeRequest(), NullLogger<BatchManager>.Instance, onFlushed);
-        await bm.FlushAsync();
-
-        Assert.False(called);
-    }
-
-    [Fact]
-    public async Task OnFlushed_CalledAsHeartbeat_EvenWhenAllObjectsHaveUpdateStatusFalse()
-    {
-        // The onFlushed callback is a per-batch heartbeat (bumps updated_at), so it must fire on
-        // every successful upload — even for batches whose objects were all added with
-        // updateStatus:false (e.g. the crawl_completions table).
-        var (_, factory) = CreateSuccessFactory();
-        var callCount = 0;
-        Func<CancellationToken, Task> onFlushed = _ =>
-        {
-            callCount++;
-            return Task.CompletedTask;
-        };
-
-        await using var bm = new BatchManager("t", factory, MakeRequest(), NullLogger<BatchManager>.Instance, onFlushed);
-        bm.AddObject(new { x = 1 }, updateStatus: false);
-        bm.AddObject(new { x = 2 }, updateStatus: false);
-
-        await bm.FlushAsync();
-
-        Assert.Equal(1, callCount);
-    }
-
-    [Fact]
     public async Task FlushAsync_BrokenCircuit_ThrowsInfrastructureUnavailable()
     {
         var handlerMock = new Mock<HttpMessageHandler>();
@@ -239,32 +175,4 @@ public class BatchManagerTests
         await bm.FlushAsync(); // should not throw
     }
 
-    [Fact]
-    public async Task OnFlushed_NotCalled_WhenFlushFails()
-    {
-        var handlerMock = new Mock<HttpMessageHandler>();
-        handlerMock.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.InternalServerError));
-
-        var httpClient = new HttpClient(handlerMock.Object);
-        var factoryMock = new Mock<IHttpClientFactory>();
-        factoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
-
-        var called = false;
-        Func<CancellationToken, Task> onFlushed = _ =>
-        {
-            called = true;
-            return Task.CompletedTask;
-        };
-
-        await using var bm = new BatchManager("t", factoryMock.Object, MakeRequest(), NullLogger<BatchManager>.Instance, onFlushed);
-        bm.AddObject(new { x = 1 });
-
-        await bm.FlushAsync();
-
-        Assert.False(called);
-    }
 }
