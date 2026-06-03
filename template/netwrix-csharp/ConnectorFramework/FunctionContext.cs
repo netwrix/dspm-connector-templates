@@ -142,8 +142,7 @@ public sealed class FunctionContext : IFunctionContext, IScanWriter, IScanProgre
             name,
             _httpClientFactory,
             Request,
-            _loggerFactory.CreateLogger<BatchManager>(),
-            onFlushed: (count, ct) => UpdateExecutionAsync(incrementCompletedObjects: count, ct: ct)));
+            _loggerFactory.CreateLogger<BatchManager>()));
 
     /// <summary>
     /// Adds an object to the named table's batch buffer.
