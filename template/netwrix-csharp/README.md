@@ -246,6 +246,58 @@ services.AddScoped(_ => new SupportedStates(Stop: true, Pause: true, Resume: tru
 
 ---
 
+## Custom metrics
+
+The framework already emits a baseline set of OTel metrics through `ConnectorFramework/ConnectorMetrics.cs` (`connector.execution.duration`, `connector.objects.uploaded`, `connector.batch.size`, `connector.tasks.*`, `connector.source.rate_limits`, plus `process.*` gauges). Resource attributes (`scan_execution_id`, `scan_id`, `source_id`, `deployment.environment`, `service.version`) are attached to every export by `Program.cs`, so handler-defined metrics inherit them automatically.
+
+When a handler needs metrics that are specific to its own work (calculator durations, per-source read counters, domain-specific error categories), define them in the connector assembly — **do not** extend `ConnectorMetrics` for handler-specific semantics. The framework registers handler meters via a wildcard, so no edit to `Program.cs` is required.
+
+### Naming convention
+
+| Element | Convention | Example |
+|---|---|---|
+| `Meter` name | `Netwrix.Connectors.<Source>.<Handler>` | `Netwrix.Connectors.SharePointOnline.EffectivePermissions` |
+| Instrument name | dotted lowercase; either the framework `connector.*` namespace for cross-handler semantics or a handler-specific prefix for domain metrics | `effective_permissions.calculator.duration`, `connector.objects.uploaded` |
+| Unit | [UCUM](https://ucum.org/ucum) | `s`, `By`, `{items}`, `{rows}` |
+| Tags | low-cardinality dimensions only (table, kind, error category) — never per-object IDs | `kind=objects\|aces\|principals`, `error=calculator` |
+
+The `Program.cs` wildcard `AddMeter("Netwrix.Connectors.*")` picks up any meter whose name matches that prefix. Drift outside the prefix means the meter is silently dropped at export — there is no build-time check.
+
+### Pattern
+
+```csharp
+// connectors/.../my-handler/MyHandlerMetrics.cs
+using System.Diagnostics.Metrics;
+
+namespace Netwrix.Connector.MyHandler;
+
+internal static class MyHandlerMetrics
+{
+    public const string MeterName = "Netwrix.Connectors.MySource.MyHandler";
+    private static readonly Meter Meter = new(MeterName, "1.0");
+
+    public static readonly Histogram<double> WorkDuration = Meter.CreateHistogram<double>(
+        "my_handler.work.duration",
+        unit: "s",
+        description: "Wall-clock time spent doing the unit of work this handler owns");
+
+    public static readonly Counter<long> RowsRead = Meter.CreateCounter<long>(
+        "my_handler.rows.read",
+        unit: "{rows}",
+        description: "Rows read from the source, tagged with `kind`");
+
+    public static readonly Counter<long> Errors = Meter.CreateCounter<long>(
+        "my_handler.errors",
+        description: "Handler errors, tagged with `kind` (e.g. transport, schema, business-rule)");
+}
+```
+
+Use the instruments anywhere in the handler — `MyHandlerMetrics.RowsRead.Add(1, new KeyValuePair<string, object?>("kind", "objects"))`. No DI wiring is required because the `Meter` is a static field.
+
+See `ConnectorFramework/ConnectorMetrics.cs` for the framework's own static-class layout (counters, histograms, observable gauges in a single static constructor) as a reference implementation.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Description |

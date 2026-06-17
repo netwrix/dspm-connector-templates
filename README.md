@@ -57,6 +57,8 @@ Both the `netwrix-csharp` and `netwrix-python` templates include a `BatchManager
 
 All templates export distributed traces, metrics, and logs to an OTLP-compatible collector. Configure the endpoint via `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://otel-collector.access-analyzer.svc.cluster.local:4318`). Set `OTEL_ENABLED=false` to disable.
 
+Framework-level metrics (batch sizes, object upload counts, execution duration, process resources) are emitted by `ConnectorFramework/ConnectorMetrics.cs` under the meter `Netwrix.ConnectorFramework`. Handler-specific metrics belong in the connector assembly under a meter named `Netwrix.Connectors.<Source>.<Handler>`; the C# template's `Program.cs` registers that prefix via a wildcard so no template edit is needed per handler. See [`template/netwrix-csharp/README.md` § Custom metrics](template/netwrix-csharp/README.md#custom-metrics) for the convention and the static-class pattern.
+
 ### Secrets
 
 Secrets are loaded from files mounted at `/var/secrets/{name}`. Access them via `context.Secrets["name"]` (C#) or `context.secrets["name"]` (Python).

@@ -445,6 +445,11 @@ internal static class Program
                 metrics.SetResourceBuilder(resourceBuilder)
                     .AddMeter(ConnectorMetrics.MeterName)
                     .AddMeter("Netwrix.Overlord.Sdk.Orchestration") // CrawlRunOrchestratorMetrics.MeterName — use type constant once Sdk.Orchestration package is bumped
+                    // Handler-specific meters defined in connector assemblies. The convention is
+                    // Meter("Netwrix.Connectors.<Source>.<Handler>") — see netwrix-csharp/README.md
+                    // § Custom metrics. The wildcard avoids touching this file for every new handler
+                    // that wants its own instruments; framework-level meters stay enumerated above.
+                    .AddMeter("Netwrix.Connectors.*")
                     .AddHttpClientInstrumentation();
 
                 if (isHttpMode)
