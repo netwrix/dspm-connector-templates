@@ -20,24 +20,64 @@ from opentelemetry import metrics, trace
 from opentelemetry.trace.status import StatusCode
 from waitress import serve
 
+_STANDARD_LOG_RECORD_ATTRS = frozenset(
+    {
+        "args",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        "taskName",
+    }
+)
+
+
+class StructuredFormatter(logging.Formatter):
+    """Formatter that appends structured extra fields as key=value pairs."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            k: v for k, v in record.__dict__.items() if k not in _STANDARD_LOG_RECORD_ATTRS and not k.startswith("_")
+        }
+        if extras:
+            fields = " ".join(f"{k}={v!r}" for k, v in extras.items())
+            return f"{base} | {fields}"
+        return base
+
+
 dictConfig(
     {
         "version": 1,
-        "formatters": {
-            "default": {
-                "format": "[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
-            }
-        },
         "handlers": {
             "console": {
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stderr",
-                "formatter": "default",
             }
         },
         "root": {"level": os.getenv("LOG_LEVEL", "INFO").upper(), "handlers": ["console"]},
     }
 )
+
+_structured_formatter = StructuredFormatter("[%(asctime)s] %(levelname)s in %(module)s: %(message)s")
+for _handler in logging.root.handlers:
+    _handler.setFormatter(_structured_formatter)
 
 SERVICE_NAME: Final = os.getenv("SERVICE_NAME", __name__)
 COMMON_FUNCTIONS_NAMESPACE: Final = os.getenv("COMMON_FUNCTIONS_NAMESPACE", "access-analyzer")
@@ -399,9 +439,7 @@ class Context:
         try:
             # Query Postgres for scan execution status via app-data-query function
             safe_scan_execution_id = scan_execution_id.replace("'", "''")
-            query = (
-                f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{safe_scan_execution_id}' LIMIT 1"
-            )
+            query = f"SELECT id, status, completed_objects FROM scan_executions WHERE id = '{safe_scan_execution_id}' LIMIT 1"
             payload = {"query": query}
 
             # Build headers with caller context information
