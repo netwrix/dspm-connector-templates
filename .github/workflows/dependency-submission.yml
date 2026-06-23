@@ -1,0 +1,56 @@
+name: Dependency submission
+
+# Self-managed replacement for GitHub's "Automatic dependency submission"
+# (dynamic/dependency-graph/auto-submission), which cannot authenticate against
+# the Azure DevOps NuGet feeds this repo's C# templates depend on. The auto
+# workflow has been failing on every run with NU1301 401 Unauthorized since at
+# least 2025-12 — see PR #94 thread for context.
+#
+# This workflow restores NuGet sources with credentials and then invokes
+# GitHub's component detection action to submit the full dependency graph
+# (NuGet + Python). After this lands, disable the automatic submission toggle
+# at Settings → Code security → Automatic dependency submission to avoid two
+# workflows fighting over the same Dependency Graph endpoint.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Authenticate against Netwrix ADO NuGet feeds
+        env:
+          NUGET_TOKEN: ${{ secrets.NUGET_TOKEN }}
+        run: |
+          # Both private feeds use the same PAT. --store-password-in-clear-text
+          # is required on Linux (no Windows credential manager). The token
+          # lives only on the runner for the duration of the job.
+          dotnet nuget add source \
+            "https://pkgs.dev.azure.com/NetwrixCorporation/_packaging/Netwrix.UK%40Local/nuget/v3/index.json" \
+            --name Netwrix.UK \
+            --username unused \
+            --password "$NUGET_TOKEN" \
+            --store-password-in-clear-text
+          dotnet nuget add source \
+            "https://pkgs.dev.azure.com/NetwrixCorporation/NetwrixAuditor/_packaging/Netwrix.Auditor/nuget/v3/index.json" \
+            --name Netwrix.Auditor \
+            --username unused \
+            --password "$NUGET_TOKEN" \
+            --store-password-in-clear-text
+
+      - name: Submit dependency graph (NuGet + Python)
+        uses: advanced-security/component-detection-dependency-submission-action@v0
