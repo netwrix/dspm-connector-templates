@@ -57,4 +57,4 @@ jobs:
             --store-password-in-clear-text
 
       - name: Submit dependency graph (NuGet + Python)
-        uses: advanced-security/component-detection-dependency-submission-action@v0
+        uses: advanced-security/component-detection-dependency-submission-action@v0.1.3
